@@ -1,0 +1,180 @@
+Oct  6 07:39:01 web-2-145 CRON[16259]: pam_unix(cron:session): session opened for user root by (uid=0)
+Oct  6 07:39:01 web-2-145 CRON[16259]: pam_unix(cron:session): session closed for user root
+Oct  6 08:09:01 web-2-145 CRON[16357]: pam_unix(cron:session): session opened for user root by (uid=0)
+Oct  6 08:09:01 web-2-145 CRON[16357]: pam_unix(cron:session): session closed for user root
+Oct  6 08:17:01 web-2-145 CRON[16413]: pam_unix(cron:session): session opened for user root by (uid=0)
+Oct  6 08:17:01 web-2-145 CRON[16413]: pam_unix(cron:session): session closed for user root
+Oct  6 08:39:01 web-2-145 CRON[16456]: pam_unix(cron:session): session opened for user root by (uid=0)
+Oct  6 08:39:01 web-2-145 CRON[16456]: pam_unix(cron:session): session closed for user root
+Oct  6 09:09:01 web-2-145 CRON[16616]: pam_unix(cron:session): session opened for user root by (uid=0)
+Oct  6 09:09:01 web-2-145 CRON[16616]: pam_unix(cron:session): session closed for user root
+Oct  6 09:17:01 web-2-145 CRON[16690]: pam_unix(cron:session): session opened for user root by (uid=0)
+Oct  6 09:17:01 web-2-145 CRON[16690]: pam_unix(cron:session): session closed for user root
+Oct  6 09:39:01 web-2-145 CRON[16781]: pam_unix(cron:session): session opened for user root by (uid=0)
+Oct  6 09:39:02 web-2-145 CRON[16781]: pam_unix(cron:session): session closed for user root
+Oct  6 10:09:01 web-2-145 CRON[16971]: pam_unix(cron:session): session opened for user root by (uid=0)
+Oct  6 10:09:01 web-2-145 CRON[16971]: pam_unix(cron:session): session closed for user root
+Oct  6 10:17:01 web-2-145 CRON[17082]: pam_unix(cron:session): session opened for user root by (uid=0)
+Oct  6 10:17:01 web-2-145 CRON[17082]: pam_unix(cron:session): session closed for user root
+Oct  6 10:39:01 web-2-145 CRON[17197]: pam_unix(cron:session): session opened for user root by (uid=0)
+Oct  6 10:39:01 web-2-145 CRON[17197]: pam_unix(cron:session): session closed for user root
+Oct  6 11:09:01 web-2-145 CRON[17314]: pam_unix(cron:session): session opened for user root by (uid=0)
+Oct  6 11:09:01 web-2-145 CRON[17314]: pam_unix(cron:session): session closed for user root
+Oct  6 11:17:01 web-2-145 CRON[17395]: pam_unix(cron:session): session opened for user root by (uid=0)
+Oct  6 11:17:01 web-2-145 CRON[17395]: pam_unix(cron:session): session closed for user root
+Oct  6 11:39:01 web-2-145 CRON[17479]: pam_unix(cron:session): session opened for user root by (uid=0)
+Oct  6 11:39:01 web-2-145 CRON[17479]: pam_unix(cron:session): session closed for user root
+Oct  6 12:09:01 web-2-145 CRON[17606]: pam_unix(cron:session): session opened for user root by (uid=0)
+Oct  6 12:09:02 web-2-145 CRON[17606]: pam_unix(cron:session): session closed for user root
+Oct  6 12:17:01 web-2-145 CRON[17671]: pam_unix(cron:session): session opened for user root by (uid=0)
+Oct  6 12:17:01 web-2-145 CRON[17671]: pam_unix(cron:session): session closed for user root
+Oct  6 12:39:01 web-2-145 CRON[17725]: pam_unix(cron:session): session opened for user root by (uid=0)
+Oct  6 12:39:01 web-2-145 CRON[17725]: pam_unix(cron:session): session closed for user root
+Oct  6 13:09:01 web-2-145 CRON[17887]: pam_unix(cron:session): session opened for user root by (uid=0)
+Oct  6 13:09:01 web-2-145 CRON[17887]: pam_unix(cron:session): session closed for user root
+Oct  6 13:17:01 web-2-145 CRON[18039]: pam_unix(cron:session): session opened for user root by (uid=0)
+Oct  6 13:17:01 web-2-145 CRON[18039]: pam_unix(cron:session): session closed for user root
+Oct  6 13:39:01 web-2-145 CRON[18165]: pam_unix(cron:session): session opened for user root by (uid=0)
+Oct  6 13:39:01 web-2-145 CRON[18165]: pam_unix(cron:session): session closed for user root
+Oct  6 14:09:01 web-2-145 CRON[18288]: pam_unix(cron:session): session opened for user root by (uid=0)
+Oct  6 14:09:01 web-2-145 CRON[18288]: pam_unix(cron:session): session closed for user root
+Oct  6 14:17:01 web-2-145 CRON[18361]: pam_unix(cron:session): session opened for user root by (uid=0)
+Oct  6 14:17:01 web-2-145 CRON[18361]: pam_unix(cron:session): session closed for user root
+Oct  6 14:39:01 web-2-145 CRON[18418]: pam_unix(cron:session): session opened for user root by (uid=0)
+Oct  6 14:39:01 web-2-145 CRON[18418]: pam_unix(cron:session): session closed for user root
+Oct  6 15:09:01 web-2-145 CRON[18537]: pam_unix(cron:session): session opened for user root by (uid=0)
+Oct  6 15:09:02 web-2-145 CRON[18537]: pam_unix(cron:session): session closed for user root
+Oct  6 15:17:01 web-2-145 CRON[18603]: pam_unix(cron:session): session opened for user root by (uid=0)
+Oct  6 15:17:01 web-2-145 CRON[18603]: pam_unix(cron:session): session closed for user root
+Oct  6 15:39:01 web-2-145 CRON[18658]: pam_unix(cron:session): session opened for user root by (uid=0)
+Oct  6 15:39:01 web-2-145 CRON[18658]: pam_unix(cron:session): session closed for user root
+Oct  6 16:09:01 web-2-145 CRON[19080]: pam_unix(cron:session): session opened for user root by (uid=0)
+Oct  6 16:09:01 web-2-145 CRON[19080]: pam_unix(cron:session): session closed for user root
+Oct  6 16:17:01 web-2-145 CRON[19148]: pam_unix(cron:session): session opened for user root by (uid=0)
+Oct  6 16:17:01 web-2-145 CRON[19148]: pam_unix(cron:session): session closed for user root
+Oct  6 16:39:01 web-2-145 CRON[19198]: pam_unix(cron:session): session opened for user root by (uid=0)
+Oct  6 16:39:01 web-2-145 CRON[19198]: pam_unix(cron:session): session closed for user root
+Oct  6 17:09:01 web-2-145 CRON[19303]: pam_unix(cron:session): session opened for user root by (uid=0)
+Oct  6 17:09:01 web-2-145 CRON[19303]: pam_unix(cron:session): session closed for user root
+Oct  6 17:17:01 web-2-145 CRON[19366]: pam_unix(cron:session): session opened for user root by (uid=0)
+Oct  6 17:17:01 web-2-145 CRON[19366]: pam_unix(cron:session): session closed for user root
+Oct  6 17:39:01 web-2-145 CRON[19410]: pam_unix(cron:session): session opened for user root by (uid=0)
+Oct  6 17:39:02 web-2-145 CRON[19410]: pam_unix(cron:session): session closed for user root
+Oct  6 18:09:01 web-2-145 CRON[19508]: pam_unix(cron:session): session opened for user root by (uid=0)
+Oct  6 18:09:01 web-2-145 CRON[19508]: pam_unix(cron:session): session closed for user root
+Oct  6 18:17:01 web-2-145 CRON[19576]: pam_unix(cron:session): session opened for user root by (uid=0)
+Oct  6 18:17:01 web-2-145 CRON[19576]: pam_unix(cron:session): session closed for user root
+Oct  6 18:39:01 web-2-145 CRON[19618]: pam_unix(cron:session): session opened for user root by (uid=0)
+Oct  6 18:39:01 web-2-145 CRON[19618]: pam_unix(cron:session): session closed for user root
+Oct  6 19:09:01 web-2-145 CRON[19719]: pam_unix(cron:session): session opened for user root by (uid=0)
+Oct  6 19:09:01 web-2-145 CRON[19719]: pam_unix(cron:session): session closed for user root
+Oct  6 19:17:01 web-2-145 CRON[19786]: pam_unix(cron:session): session opened for user root by (uid=0)
+Oct  6 19:17:01 web-2-145 CRON[19786]: pam_unix(cron:session): session closed for user root
+Oct  6 19:39:01 web-2-145 CRON[19838]: pam_unix(cron:session): session opened for user root by (uid=0)
+Oct  6 19:39:01 web-2-145 CRON[19838]: pam_unix(cron:session): session closed for user root
+Oct  6 20:09:01 web-2-145 CRON[19937]: pam_unix(cron:session): session opened for user root by (uid=0)
+Oct  6 20:09:01 web-2-145 CRON[19937]: pam_unix(cron:session): session closed for user root
+Oct  6 20:17:01 web-2-145 CRON[20001]: pam_unix(cron:session): session opened for user root by (uid=0)
+Oct  6 20:17:01 web-2-145 CRON[20001]: pam_unix(cron:session): session closed for user root
+Oct  6 20:39:01 web-2-145 CRON[20045]: pam_unix(cron:session): session opened for user root by (uid=0)
+Oct  6 20:39:02 web-2-145 CRON[20045]: pam_unix(cron:session): session closed for user root
+Oct  6 21:09:01 web-2-145 CRON[20161]: pam_unix(cron:session): session opened for user root by (uid=0)
+Oct  6 21:09:01 web-2-145 CRON[20161]: pam_unix(cron:session): session closed for user root
+Oct  6 21:17:01 web-2-145 CRON[20229]: pam_unix(cron:session): session opened for user root by (uid=0)
+Oct  6 21:17:01 web-2-145 CRON[20229]: pam_unix(cron:session): session closed for user root
+Oct  6 21:39:01 web-2-145 CRON[20274]: pam_unix(cron:session): session opened for user root by (uid=0)
+Oct  6 21:39:01 web-2-145 CRON[20274]: pam_unix(cron:session): session closed for user root
+Oct  6 22:09:01 web-2-145 CRON[20378]: pam_unix(cron:session): session opened for user root by (uid=0)
+Oct  6 22:09:01 web-2-145 CRON[20378]: pam_unix(cron:session): session closed for user root
+Oct  6 22:17:01 web-2-145 CRON[20452]: pam_unix(cron:session): session opened for user root by (uid=0)
+Oct  6 22:17:01 web-2-145 CRON[20452]: pam_unix(cron:session): session closed for user root
+Oct  6 22:39:01 web-2-145 CRON[20501]: pam_unix(cron:session): session opened for user root by (uid=0)
+Oct  6 22:39:01 web-2-145 CRON[20501]: pam_unix(cron:session): session closed for user root
+Oct  6 23:09:01 web-2-145 CRON[20608]: pam_unix(cron:session): session opened for user root by (uid=0)
+Oct  6 23:09:01 web-2-145 CRON[20608]: pam_unix(cron:session): session closed for user root
+Oct  6 23:17:01 web-2-145 CRON[20671]: pam_unix(cron:session): session opened for user root by (uid=0)
+Oct  6 23:17:01 web-2-145 CRON[20671]: pam_unix(cron:session): session closed for user root
+Oct  6 23:39:01 web-2-145 CRON[20710]: pam_unix(cron:session): session opened for user root by (uid=0)
+Oct  6 23:39:02 web-2-145 CRON[20710]: pam_unix(cron:session): session closed for user root
+Oct  7 00:09:01 web-2-145 CRON[20819]: pam_unix(cron:session): session opened for user root by (uid=0)
+Oct  7 00:09:01 web-2-145 CRON[20819]: pam_unix(cron:session): session closed for user root
+Oct  7 00:17:01 web-2-145 CRON[20891]: pam_unix(cron:session): session opened for user root by (uid=0)
+Oct  7 00:17:01 web-2-145 CRON[20891]: pam_unix(cron:session): session closed for user root
+Oct  7 00:39:01 web-2-145 CRON[20936]: pam_unix(cron:session): session opened for user root by (uid=0)
+Oct  7 00:39:01 web-2-145 CRON[20936]: pam_unix(cron:session): session closed for user root
+Oct  7 01:09:01 web-2-145 CRON[21033]: pam_unix(cron:session): session opened for user root by (uid=0)
+Oct  7 01:09:01 web-2-145 CRON[21033]: pam_unix(cron:session): session closed for user root
+Oct  7 01:17:01 web-2-145 CRON[21097]: pam_unix(cron:session): session opened for user root by (uid=0)
+Oct  7 01:17:01 web-2-145 CRON[21097]: pam_unix(cron:session): session closed for user root
+Oct  7 01:39:01 web-2-145 CRON[21135]: pam_unix(cron:session): session opened for user root by (uid=0)
+Oct  7 01:39:01 web-2-145 CRON[21135]: pam_unix(cron:session): session closed for user root
+Oct  7 02:09:01 web-2-145 CRON[21235]: pam_unix(cron:session): session opened for user root by (uid=0)
+Oct  7 02:09:01 web-2-145 CRON[21235]: pam_unix(cron:session): session closed for user root
+Oct  7 02:17:01 web-2-145 CRON[21298]: pam_unix(cron:session): session opened for user root by (uid=0)
+Oct  7 02:17:01 web-2-145 CRON[21298]: pam_unix(cron:session): session closed for user root
+Oct  7 02:39:01 web-2-145 CRON[21340]: pam_unix(cron:session): session opened for user root by (uid=0)
+Oct  7 02:39:01 web-2-145 CRON[21340]: pam_unix(cron:session): session closed for user root
+Oct  7 03:09:01 web-2-145 CRON[21441]: pam_unix(cron:session): session opened for user root by (uid=0)
+Oct  7 03:09:02 web-2-145 CRON[21441]: pam_unix(cron:session): session closed for user root
+Oct  7 03:17:01 web-2-145 CRON[21503]: pam_unix(cron:session): session opened for user root by (uid=0)
+Oct  7 03:17:01 web-2-145 CRON[21503]: pam_unix(cron:session): session closed for user root
+Oct  7 03:39:01 web-2-145 CRON[21548]: pam_unix(cron:session): session opened for user root by (uid=0)
+Oct  7 03:39:01 web-2-145 CRON[21548]: pam_unix(cron:session): session closed for user root
+Oct  7 04:09:01 web-2-145 CRON[21696]: pam_unix(cron:session): session opened for user root by (uid=0)
+Oct  7 04:09:01 web-2-145 CRON[21696]: pam_unix(cron:session): session closed for user root
+Oct  7 04:17:01 web-2-145 CRON[21760]: pam_unix(cron:session): session opened for user root by (uid=0)
+Oct  7 04:17:01 web-2-145 CRON[21760]: pam_unix(cron:session): session closed for user root
+Oct  7 04:39:01 web-2-145 CRON[21797]: pam_unix(cron:session): session opened for user root by (uid=0)
+Oct  7 04:39:01 web-2-145 CRON[21797]: pam_unix(cron:session): session closed for user root
+Oct  7 05:09:01 web-2-145 CRON[21903]: pam_unix(cron:session): session opened for user root by (uid=0)
+Oct  7 05:09:01 web-2-145 CRON[21903]: pam_unix(cron:session): session closed for user root
+Oct  7 05:17:01 web-2-145 CRON[21969]: pam_unix(cron:session): session opened for user root by (uid=0)
+Oct  7 05:17:01 web-2-145 CRON[21969]: pam_unix(cron:session): session closed for user root
+Oct  7 05:39:01 web-2-145 CRON[22016]: pam_unix(cron:session): session opened for user root by (uid=0)
+Oct  7 05:39:01 web-2-145 CRON[22016]: pam_unix(cron:session): session closed for user root
+Oct  7 06:09:01 web-2-145 CRON[22128]: pam_unix(cron:session): session opened for user root by (uid=0)
+Oct  7 06:09:01 web-2-145 CRON[22128]: pam_unix(cron:session): session closed for user root
+Oct  7 06:17:01 web-2-145 CRON[22190]: pam_unix(cron:session): session opened for user root by (uid=0)
+Oct  7 06:17:02 web-2-145 CRON[22190]: pam_unix(cron:session): session closed for user root
+Oct  7 06:25:01 web-2-145 CRON[22203]: pam_unix(cron:session): session opened for user root by (uid=0)
+Oct  7 06:25:01 web-2-145 CRON[22203]: pam_unix(cron:session): session closed for user root
+Oct  7 06:39:01 web-2-145 CRON[22228]: pam_unix(cron:session): session opened for user root by (uid=0)
+Oct  7 06:39:01 web-2-145 CRON[22228]: pam_unix(cron:session): session closed for user root
+Oct  7 07:09:01 web-2-145 CRON[22327]: pam_unix(cron:session): session opened for user root by (uid=0)
+Oct  7 07:09:01 web-2-145 CRON[22327]: pam_unix(cron:session): session closed for user root
+Oct  7 07:17:01 web-2-145 CRON[22394]: pam_unix(cron:session): session opened for user root by (uid=0)
+Oct  7 07:17:01 web-2-145 CRON[22394]: pam_unix(cron:session): session closed for user root
+Oct  7 07:30:01 web-2-145 CRON[22419]: pam_unix(cron:session): session opened for user root by (uid=0)
+Oct  7 07:30:01 web-2-145 CRON[22419]: pam_unix(cron:session): session closed for user root
+Oct  7 07:39:01 web-2-145 CRON[22654]: pam_unix(cron:session): session opened for user root by (uid=0)
+Oct  7 07:39:01 web-2-145 CRON[22654]: pam_unix(cron:session): session closed for user root
+Oct  7 08:09:01 web-2-145 CRON[22764]: pam_unix(cron:session): session opened for user root by (uid=0)
+Oct  7 08:09:01 web-2-145 CRON[22764]: pam_unix(cron:session): session closed for user root
+Oct  7 08:17:01 web-2-145 CRON[22822]: pam_unix(cron:session): session opened for user root by (uid=0)
+Oct  7 08:17:01 web-2-145 CRON[22822]: pam_unix(cron:session): session closed for user root
+Oct  7 08:39:01 web-2-145 CRON[22864]: pam_unix(cron:session): session opened for user root by (uid=0)
+Oct  7 08:39:01 web-2-145 CRON[22864]: pam_unix(cron:session): session closed for user root
+Oct  7 09:09:01 web-2-145 CRON[22978]: pam_unix(cron:session): session opened for user root by (uid=0)
+Oct  7 09:09:01 web-2-145 CRON[22978]: pam_unix(cron:session): session closed for user root
+Oct  7 09:17:01 web-2-145 CRON[23047]: pam_unix(cron:session): session opened for user root by (uid=0)
+Oct  7 09:17:01 web-2-145 CRON[23047]: pam_unix(cron:session): session closed for user root
+Oct  7 09:39:01 web-2-145 CRON[23140]: pam_unix(cron:session): session opened for user root by (uid=0)
+Oct  7 09:39:02 web-2-145 CRON[23140]: pam_unix(cron:session): session closed for user root
+Oct  7 10:09:01 web-2-145 CRON[23327]: pam_unix(cron:session): session opened for user root by (uid=0)
+Oct  7 10:09:01 web-2-145 CRON[23327]: pam_unix(cron:session): session closed for user root
+Oct  7 10:17:01 web-2-145 CRON[23392]: pam_unix(cron:session): session opened for user root by (uid=0)
+Oct  7 10:17:01 web-2-145 CRON[23392]: pam_unix(cron:session): session closed for user root
+Oct  7 10:39:01 web-2-145 CRON[23435]: pam_unix(cron:session): session opened for user root by (uid=0)
+Oct  7 10:39:01 web-2-145 CRON[23435]: pam_unix(cron:session): session closed for user root
+Oct  7 11:09:01 web-2-145 CRON[23552]: pam_unix(cron:session): session opened for user root by (uid=0)
+Oct  7 11:09:01 web-2-145 CRON[23552]: pam_unix(cron:session): session closed for user root
+Oct  7 11:17:01 web-2-145 CRON[23621]: pam_unix(cron:session): session opened for user root by (uid=0)
+Oct  7 11:17:01 web-2-145 CRON[23621]: pam_unix(cron:session): session closed for user root
+Oct  7 11:39:01 web-2-145 CRON[23741]: pam_unix(cron:session): session opened for user root by (uid=0)
+Oct  7 11:39:01 web-2-145 CRON[23741]: pam_unix(cron:session): session closed for user root
+Oct  7 11:41:12 web-2-145 sshd[23791]: Accepted publickey for user2 from 71.188.207.22 port 50300 ssh2: RSA 3567:a368:7650:adbe:426c:daaa:a1fb:6e42:4e07:7938:9cf4:e68f:c023:5baa:e6dc:1214
+Oct  7 11:41:12 web-2-145 sshd[23791]: pam_unix(sshd:session): session opened for user user2 by (uid=0)
+Oct  7 11:41:22 web-2-145 sudo:     user2 : TTY=pts/0 ; PWD=/home/user2 ; USER=root ; COMMAND=/bin/bash
+Oct  7 11:41:22 web-2-145 sudo: pam_unix(sudo:session): session opened for user root by user2(uid=0)
+Oct  7 11:45:13 web-2-145 sudo:     root : TTY=pts/0 ; PWD=/home/user2 ; USER=root ; COMMAND=/bin/tar -czvf /home/user2/logs_backup.tar.gz /var/log
+Oct  7 11:45:13 web-2-145 sudo: pam_unix(sudo:session): session opened for user root by user2(uid=0)

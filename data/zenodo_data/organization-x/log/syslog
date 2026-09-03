@@ -1,0 +1,18 @@
+Oct  7 07:35:02 web-2-145 anacron[22440]: Job `cron.daily' terminated
+Oct  7 07:39:01 web-2-145 CRON[22655]: (root) CMD (  [ -x /usr/lib/php5/sessionclean ] && /usr/lib/php5/sessionclean)
+Oct  7 07:40:01 web-2-145 anacron[22440]: Job `cron.weekly' started
+Oct  7 07:40:01 web-2-145 anacron[22703]: Updated timestamp for job `cron.weekly' to 2025-10-07
+Oct  7 07:40:01 web-2-145 anacron[22440]: Job `cron.weekly' terminated
+Oct  7 07:40:01 web-2-145 anacron[22440]: Normal exit (2 jobs run)
+Oct  7 08:09:01 web-2-145 CRON[22765]: (root) CMD (  [ -x /usr/lib/php5/sessionclean ] && /usr/lib/php5/sessionclean)
+Oct  7 08:17:01 web-2-145 CRON[22823]: (root) CMD (   cd / && run-parts --report /etc/cron.hourly)
+Oct  7 08:39:01 web-2-145 CRON[22865]: (root) CMD (  [ -x /usr/lib/php5/sessionclean ] && /usr/lib/php5/sessionclean)
+Oct  7 09:09:01 web-2-145 CRON[22979]: (root) CMD (  [ -x /usr/lib/php5/sessionclean ] && /usr/lib/php5/sessionclean)
+Oct  7 09:17:01 web-2-145 CRON[23048]: (root) CMD (   cd / && run-parts --report /etc/cron.hourly)
+Oct  7 09:39:01 web-2-145 CRON[23141]: (root) CMD (  [ -x /usr/lib/php5/sessionclean ] && /usr/lib/php5/sessionclean)
+Oct  7 10:09:01 web-2-145 CRON[23328]: (root) CMD (  [ -x /usr/lib/php5/sessionclean ] && /usr/lib/php5/sessionclean)
+Oct  7 10:17:01 web-2-145 CRON[23393]: (root) CMD (   cd / && run-parts --report /etc/cron.hourly)
+Oct  7 10:39:01 web-2-145 CRON[23436]: (root) CMD (  [ -x /usr/lib/php5/sessionclean ] && /usr/lib/php5/sessionclean)
+Oct  7 11:09:01 web-2-145 CRON[23553]: (root) CMD (  [ -x /usr/lib/php5/sessionclean ] && /usr/lib/php5/sessionclean)
+Oct  7 11:17:01 web-2-145 CRON[23622]: (root) CMD (   cd / && run-parts --report /etc/cron.hourly)
+Oct  7 11:39:01 web-2-145 CRON[23742]: (root) CMD (  [ -x /usr/lib/php5/sessionclean ] && /usr/lib/php5/sessionclean)

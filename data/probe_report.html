@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Microguard Probe — https://example.com</title>
+    <style>
+        :root {
+            --bg: #0f172a;
+            --card: #1e293b;
+            --card-border: #334155;
+            --text: #e2e8f0;
+            --text-muted: #94a3b8;
+            --green: #10b981;
+            --yellow: #f59e0b;
+            --red: #ef4444;
+            --blue: #3b82f6;
+        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            line-height: 1.6;
+            padding: 2rem;
+        }
+        .container { max-width: 900px; margin: 0 auto; }
+        .header { text-align: center; margin-bottom: 2rem; padding-bottom: 2rem; border-bottom: 1px solid var(--card-border); }
+        .header h1 { font-size: 2rem; margin-bottom: 0.5rem; }
+        .header h1 span { color: var(--blue); }
+        .header .url { color: var(--text-muted); font-family: monospace; font-size: 0.9rem; word-break: break-all; }
+        .score-card {
+            background: var(--card);
+            border: 2px solid #10b981;
+            border-radius: 12px;
+            padding: 2rem;
+            text-align: center;
+            margin-bottom: 2rem;
+        }
+        .score-card .label { font-size: 0.9rem; text-transform: uppercase; letter-spacing: 0.1em; color: var(--text-muted); margin-bottom: 0.5rem; }
+        .score-card .value { font-size: 3rem; font-weight: 700; color: #10b981; }
+        .score-card .status { font-size: 1.2rem; font-weight: 600; color: #10b981; margin-top: 0.5rem; }
+        .info-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 1rem; margin-bottom: 2rem; }
+        .info-item { background: var(--card); border: 1px solid var(--card-border); border-radius: 8px; padding: 1rem; text-align: center; }
+        .info-item .value { font-size: 1.5rem; font-weight: 600; }
+        .info-item .label { font-size: 0.75rem; color: var(--text-muted); text-transform: uppercase; }
+        .section { background: var(--card); border: 1px solid var(--card-border); border-radius: 12px; padding: 1.5rem; margin-bottom: 1.5rem; }
+        .section h2 { font-size: 1rem; margin-bottom: 1rem; padding-bottom: 0.5rem; border-bottom: 1px solid var(--card-border); }
+        .analysis { padding: 1rem; background: #0f172a; border-radius: 8px; }
+        .analysis .label { color: var(--text-muted); font-size: 0.85rem; }
+        .analysis .value { font-weight: 600; }
+        .analysis .reason { color: var(--text-muted); font-size: 0.9rem; margin-top: 0.25rem; }
+        table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+        th { text-align: left; padding: 0.5rem; color: var(--text-muted); font-size: 0.75rem; text-transform: uppercase; }
+        td { padding: 0.5rem; border-top: 1px solid var(--card-border); }
+        .mono { font-family: 'SF Mono', 'Fira Code', monospace; font-size: 0.85rem; }
+        .footer { text-align: center; color: var(--text-muted); font-size: 0.8rem; margin-top: 2rem; padding-top: 1rem; border-top: 1px solid var(--card-border); }
+        .footer a { color: var(--blue); text-decoration: none; }
+        @media print {
+            body { background: white; color: #1e293b; }
+            .card { background: #f8fafc; border-color: #e2e8f0; }
+            .score-card { background: #f8fafc; }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🔍 <span>Microguard</span> URL Probe</h1>
+            <div class="url">https://example.com</div>
+        </div>
+        
+        <div class="score-card">
+            <div class="label">Bot Detection Score</div>
+            <div class="value">0.16</div>
+            <div class="status">LIKELY HUMAN</div>
+        </div>
+        
+        <div class="info-grid">
+            <div class="info-item">
+                <div class="value">HTTP 200</div>
+                <div class="label">Status</div>
+            </div>
+            <div class="info-item">
+                <div class="value">0.138s</div>
+                <div class="label">Response Time</div>
+            </div>
+            <div class="info-item">
+                <div class="value">1</div>
+                <div class="label">Probes Sent</div>
+            </div>
+            <div class="info-item">
+                <div class="value">70%</div>
+                <div class="label">Threshold</div>
+            </div>
+        </div>
+        
+        <div class="section">
+            <h2>Analysis</h2>
+            <div class="analysis">
+                <div class="label">Heuristic Score</div>
+                <div class="value">0.30</div>
+                <div class="reason">no strong bot signals detected</div>
+            </div>
+            <div class="analysis" style="margin-top: 1rem"><div class="label">ML Model Score</div><div class="value">0.06</div></div>
+        </div>
+        
+        <div class="section">
+            <h2>Extracted Features</h2>
+            <table>
+                <thead><tr><th>Feature</th><th>Value</th></tr></thead>
+                <tbody>
+                    <tr><td>Response Time</td><td class="mono">0.138s</td></tr>
+<tr><td>Time to First Byte</td><td class="mono">0.138s</td></tr>
+<tr><td>Timing Consistency</td><td class="mono">0.000</td></tr>
+<tr><td>Body Entropy</td><td class="mono">5.033</td></tr>
+<tr><td>Body Size</td><td class="mono">1KB</td></tr>
+<tr><td>Header Count</td><td class="mono">0.550</td></tr>
+<tr><td>CSP Header</td><td class="mono">❌ No</td></tr>
+<tr><td>X-Frame-Options</td><td class="mono">❌ No</td></tr>
+<tr><td>HSTS Header</td><td class="mono">❌ No</td></tr>
+
+                </tbody>
+            </table>
+        </div>
+        
+        <div class="section">
+            <h2>Response Headers</h2>
+            <table>
+                <thead><tr><th>Header</th><th>Value</th></tr></thead>
+                <tbody>
+                    <tr><td class="mono">Accept-Ranges</td><td>bytes</td></tr>
+<tr><td class="mono">Age</td><td>9414</td></tr>
+<tr><td class="mono">CF-RAY</td><td>a3573b1ccf8f995a-LHE</td></tr>
+<tr><td class="mono">Connection</td><td>close</td></tr>
+<tr><td class="mono">Content-Type</td><td>text/html</td></tr>
+<tr><td class="mono">Date</td><td>Thu, 03 Sep 2026 19:41:15 GMT</td></tr>
+<tr><td class="mono">Server</td><td>cloudflare</td></tr>
+<tr><td class="mono">Transfer-Encoding</td><td>chunked</td></tr>
+<tr><td class="mono">allow</td><td>GET, HEAD</td></tr>
+<tr><td class="mono">cf-cache-status</td><td>HIT</td></tr>
+<tr><td class="mono">last-modified</td><td>Sun, 30 Aug 2026 04:11:49 GMT</td></tr>
+
+                </tbody>
+            </table>
+        </div>
+        
+        <div class="section"><h2>Body Preview</h2><pre class="mono" style="white-space: pre-wrap; word-break: break-all; font-size: 0.8rem; color: var(--text-muted);">&lt;!doctype html&gt;&lt;html lang="en"&gt;&lt;head&gt;&lt;title&gt;Example Domain&lt;/title&gt;&lt;link rel="icon" href="data:,"&gt;&lt;meta name="viewport" content="width=device-width, initial-scale=1"&gt;&lt;style&gt;body{background:#eee;width:60vw;margin:15vh auto;font-family:system-ui,sans-serif}h1{font-size:1.5em}div{opacity:0.8}a:link,a:visited{color:#348}&lt;/style&gt;&lt;/head&gt;&lt;body&gt;&lt;div&gt;&lt;h1&gt;Example Domain&lt;/h1&gt;&lt;p&gt;This domain is for use in documentation examples without needing permission. Avoid use in operations.&lt;/p&gt;&lt;p&gt;&lt;a href="https://iana.o</pre></div>
+        
+        <div class="footer">
+            <p>Powered by <a href="https://github.com/karpathy/micrograd">micrograd</a> · Microguard v0.1.0</p>
+        </div>
+    </div>
+</body>
+</html>

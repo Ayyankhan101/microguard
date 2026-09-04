@@ -11,6 +11,7 @@ from microguard.labeler import (
     ATTACK_TOOL_RE,
     BOTNET_URL_RE,
     CLOUDFLARE_BYPASS_RE,
+    _check_botnet_signatures,
     label_entries,
     label_session,
 )
@@ -185,6 +186,17 @@ class TestBotnetSignatures:
         session = _make_session("10.0.0.1", "Bot0/1.0", entries)
         label, _conf, _reason = label_session(session)
         assert label == 'bot'
+
+    def test_single_request_not_flagged_as_ua_rotation(self):
+        # A session with 1 request has exactly 1 UA variant — there's
+        # nothing to "rotate" between. min(10, request_count * 0.3) drops
+        # below 1 for request_count in {1, 2, 3}, so any non-empty UA set
+        # (always >= 1) incorrectly satisfied `len(ua_variants) > threshold`.
+        entries = [_make_entry(user_agent="Mozilla/5.0 Chrome/120.0.0.0")]
+        session = _make_session("192.168.1.5", "Mozilla/5.0 Chrome/120.0.0.0", entries)
+        is_bot, reason = _check_botnet_signatures(session)
+        assert is_bot is False
+        assert reason == ''
 
     def test_botnet_regex_matches(self):
         assert BOTNET_URL_RE.search("/shell.cgi")

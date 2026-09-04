@@ -175,9 +175,12 @@ def _check_botnet_signatures(session: Session) -> tuple[bool, str]:
     if errors_4xx / len(entries) > 0.7 and session.request_count > 30:
         return True, f'directory brute-force ({errors_4xx}/{len(entries)} 4xx responses)'
     
-    # User-agent rotation (common in distributed attacks)
+    # User-agent rotation (common in distributed attacks). Requires at
+    # least 2 variants — a single UA can't "rotate", and the scaled
+    # threshold below 1 for request_count < 4 would otherwise flag every
+    # single-UA session regardless of actual diversity.
     ua_variants = {e.user_agent for e in entries}
-    if len(ua_variants) > min(10, session.request_count * 0.3):
+    if len(ua_variants) >= 2 and len(ua_variants) > min(10, session.request_count * 0.3):
         return True, f'UA rotation ({len(ua_variants)} variants in {session.request_count} requests)'
     
     return False, ''

@@ -193,9 +193,10 @@ def main():
     )
     scan_parser.add_argument(
         '--output', '-o',
-        choices=['terminal', 'json', 'html'],
+        choices=['terminal', 'json', 'html', 'nginx', 'cloudflare'],
         default='terminal',
-        help='Output format (default: terminal)'
+        help='Output format (default: terminal). nginx/cloudflare emit a '
+             'deny-list/firewall-rule expression for DANGER-scored IPs.'
     )
     scan_parser.add_argument(
         '--output-file', '-O',
@@ -348,14 +349,24 @@ def main():
             from .report import format_json_pretty
             print(format_json_pretty(results))
         elif args.output_file:
-            from .report import format_html, format_json, format_terminal
+            from .report import (
+                format_cloudflare_rule,
+                format_html,
+                format_json,
+                format_nginx_denylist,
+                format_terminal,
+            )
             if args.output == 'html':
                 content = format_html(results)
             elif args.output == 'json':
                 content = format_json(results)
+            elif args.output == 'nginx':
+                content = format_nginx_denylist(results)
+            elif args.output == 'cloudflare':
+                content = format_cloudflare_rule(results)
             else:
                 content = format_terminal(results)
-            
+
             with open(args.output_file, 'w', encoding='utf-8') as f:
                 f.write(content)
             print(f"📄 Report saved to {args.output_file}", file=sys.stderr)

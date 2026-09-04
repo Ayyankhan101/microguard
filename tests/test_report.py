@@ -3,9 +3,11 @@
 from microguard.report import (
     _colorize,
     _score_bar,
+    format_cloudflare_rule,
     format_html,
     format_json,
     format_json_pretty,
+    format_nginx_denylist,
     format_terminal,
     format_verbose,
     print_report,
@@ -320,6 +322,84 @@ class TestFormatVerbose:
         assert 'known bot UA' in output
 
 
+class TestFormatNginxDenylist:
+    """Tests for format_nginx_denylist function."""
+
+    def test_includes_danger_ip_as_deny_rule(self):
+        result = {
+            'sessions': [
+                {'ip': '10.0.0.50', 'score': 0.95, 'label': 'bot'},
+            ],
+        }
+        output = format_nginx_denylist(result)
+        assert 'deny 10.0.0.50;' in output
+
+    def test_excludes_non_danger_sessions(self):
+        result = {
+            'sessions': [
+                {'ip': '10.0.0.50', 'score': 0.95, 'label': 'bot'},
+                {'ip': '192.168.1.100', 'score': 0.31, 'label': 'human'},
+            ],
+        }
+        output = format_nginx_denylist(result)
+        assert 'deny 10.0.0.50;' in output
+        assert '192.168.1.100' not in output
+
+    def test_dedupes_repeated_ip(self):
+        result = {
+            'sessions': [
+                {'ip': '10.0.0.50', 'score': 0.95, 'label': 'bot'},
+                {'ip': '10.0.0.50', 'score': 0.88, 'label': 'bot'},
+            ],
+        }
+        output = format_nginx_denylist(result)
+        assert output.count('deny 10.0.0.50;') == 1
+
+    def test_empty_when_no_danger_sessions(self):
+        result = {
+            'sessions': [
+                {'ip': '192.168.1.100', 'score': 0.31, 'label': 'human'},
+            ],
+        }
+        output = format_nginx_denylist(result)
+        assert 'deny' not in output
+        assert 'nothing to block' in output
+
+
+class TestFormatCloudflareRule:
+    """Tests for format_cloudflare_rule function."""
+
+    def test_includes_danger_ip_in_expression(self):
+        result = {
+            'sessions': [
+                {'ip': '10.0.0.50', 'score': 0.95, 'label': 'bot'},
+            ],
+        }
+        output = format_cloudflare_rule(result)
+        assert '(ip.src in {10.0.0.50})' in output
+
+    def test_multiple_ips_space_separated_and_sorted(self):
+        result = {
+            'sessions': [
+                {'ip': '10.0.0.99', 'score': 0.95, 'label': 'bot'},
+                {'ip': '10.0.0.5', 'score': 0.90, 'label': 'bot'},
+                {'ip': '10.0.0.5', 'score': 0.90, 'label': 'bot'},
+            ],
+        }
+        output = format_cloudflare_rule(result)
+        assert '(ip.src in {10.0.0.5 10.0.0.99})' in output
+
+    def test_empty_when_no_danger_sessions(self):
+        result = {
+            'sessions': [
+                {'ip': '192.168.1.100', 'score': 0.31, 'label': 'human'},
+            ],
+        }
+        output = format_cloudflare_rule(result)
+        assert 'ip.src' not in output
+        assert 'nothing to block' in output
+
+
 class TestFormatHtml:
     """Tests for format_html function."""
 
@@ -388,3 +468,15 @@ class TestPrintReport:
         print_report(result, fmt='terminal')
         captured = capsys.readouterr()
         assert 'Microguard' in captured.out
+
+    def test_nginx_format(self, capsys):
+        result = {'sessions': [{'ip': '10.0.0.50', 'score': 0.95, 'label': 'bot'}]}
+        print_report(result, fmt='nginx')
+        captured = capsys.readouterr()
+        assert 'deny 10.0.0.50;' in captured.out
+
+    def test_cloudflare_format(self, capsys):
+        result = {'sessions': [{'ip': '10.0.0.50', 'score': 0.95, 'label': 'bot'}]}
+        print_report(result, fmt='cloudflare')
+        captured = capsys.readouterr()
+        assert '(ip.src in {10.0.0.50})' in captured.out

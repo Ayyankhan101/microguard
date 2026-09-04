@@ -1,18 +1,23 @@
 """Tests for the feature extraction module."""
 
-import pytest
-from datetime import datetime, timedelta
-from microguard.parser import LogEntry
+from datetime import datetime, timedelta, timezone
+
 from microguard.features import (
-    extract_features, group_into_sessions, Session,
-    _shannon_entropy, _coefficient_of_variation, _url_depth, _url_width,
-    FEATURE_NAMES
+    FEATURE_NAMES,
+    Session,
+    _coefficient_of_variation,
+    _shannon_entropy,
+    _url_depth,
+    _url_width,
+    extract_features,
+    group_into_sessions,
 )
+from microguard.parser import LogEntry
 
 
 def _make_entry(
     ip: str = "192.168.1.1",
-    timestamp: datetime = None,
+    timestamp: datetime | None = None,
     method: str = "GET",
     url: str = "/products",
     status: int = 200,
@@ -22,7 +27,7 @@ def _make_entry(
 ) -> LogEntry:
     """Create a test log entry."""
     if timestamp is None:
-        timestamp = datetime(2023, 3, 24, 17, 7, 41)
+        timestamp = datetime(2023, 3, 24, 17, 7, 41, tzinfo=timezone.utc)
     return LogEntry(
         ip=ip,
         timestamp=timestamp,
@@ -98,7 +103,7 @@ class TestFeatureExtraction:
         session = Session("192.168.1.1", "Mozilla/5.0")
         
         # Add 5 requests with 1-second gaps
-        base_time = datetime(2023, 3, 24, 17, 0, 0)
+        base_time = datetime(2023, 3, 24, 17, 0, 0, tzinfo=timezone.utc)
         for i in range(5):
             entry = _make_entry(
                 timestamp=base_time + timedelta(seconds=i),
@@ -142,7 +147,7 @@ class TestFeatureExtraction:
         """Bot-like uniform timing should have low CV."""
         session = Session("10.0.0.1", "python-requests/2.28.0")
         
-        base_time = datetime(2023, 3, 24, 17, 0, 0)
+        base_time = datetime(2023, 3, 24, 17, 0, 0, tzinfo=timezone.utc)
         for i in range(10):
             entry = _make_entry(
                 timestamp=base_time + timedelta(seconds=i * 0.05),  # 50ms uniform
@@ -181,7 +186,7 @@ class TestSessionGrouping:
     
     def test_single_ip(self):
         entries = [
-            _make_entry(ip="192.168.1.1", timestamp=datetime(2023, 3, 24, 17, 0, i))
+            _make_entry(ip="192.168.1.1", timestamp=datetime(2023, 3, 24, 17, 0, i, tzinfo=timezone.utc))
             for i in range(5)
         ]
         sessions = group_into_sessions(entries)
@@ -190,8 +195,8 @@ class TestSessionGrouping:
     
     def test_multiple_ips(self):
         entries = [
-            _make_entry(ip="192.168.1.1", timestamp=datetime(2023, 3, 24, 17, 0, 0)),
-            _make_entry(ip="192.168.1.2", timestamp=datetime(2023, 3, 24, 17, 0, 1)),
+            _make_entry(ip="192.168.1.1", timestamp=datetime(2023, 3, 24, 17, 0, 0, tzinfo=timezone.utc)),
+            _make_entry(ip="192.168.1.2", timestamp=datetime(2023, 3, 24, 17, 0, 1, tzinfo=timezone.utc)),
         ]
         sessions = group_into_sessions(entries)
         assert len(sessions) == 2
@@ -199,8 +204,8 @@ class TestSessionGrouping:
     def test_timeout_splits_session(self):
         """Requests far apart should create new sessions."""
         entries = [
-            _make_entry(ip="192.168.1.1", timestamp=datetime(2023, 3, 24, 17, 0, 0)),
-            _make_entry(ip="192.168.1.1", timestamp=datetime(2023, 3, 24, 18, 0, 0)),  # 1 hour later
+            _make_entry(ip="192.168.1.1", timestamp=datetime(2023, 3, 24, 17, 0, 0, tzinfo=timezone.utc)),
+            _make_entry(ip="192.168.1.1", timestamp=datetime(2023, 3, 24, 18, 0, 0, tzinfo=timezone.utc)),  # 1 hour later
         ]
         sessions = group_into_sessions(entries, timeout_minutes=30)
         assert len(sessions) == 2

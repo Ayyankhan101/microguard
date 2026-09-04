@@ -4,8 +4,7 @@ Supports terminal table and JSON output formats.
 """
 
 import json
-import sys
-from typing import List, Dict, Any, Optional
+from typing import Any
 
 
 def _colorize(text: str, color: str) -> str:
@@ -65,7 +64,7 @@ def _score_bar(score: float, width: int = 10) -> str:
     return bar_char * filled + '░' * empty
 
 
-def format_terminal(results: Dict[str, Any]) -> str:
+def format_terminal(results: dict[str, Any]) -> str:
     """Format results as a terminal-friendly table.
     
     Args:
@@ -199,7 +198,7 @@ def format_terminal(results: Dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def format_json(results: Dict[str, Any]) -> str:
+def format_json(results: dict[str, Any]) -> str:
     """Format results as JSON.
     
     Args:
@@ -208,7 +207,7 @@ def format_json(results: Dict[str, Any]) -> str:
     return json.dumps(results, indent=2, default=str)
 
 
-def format_json_pretty(results: Dict[str, Any]) -> str:
+def format_json_pretty(results: dict[str, Any]) -> str:
     """Format results as human-friendly colored JSON for terminal reading.
     
     Adds ANSI colors to keys, scores, and labels so the JSON
@@ -278,7 +277,7 @@ def format_json_pretty(results: Dict[str, Any]) -> str:
         lines.append(f'      {_k("label")}: {_label_color(s.get("heuristic_label", "?"))},')
         lines.append(f'      {_k("confidence")}: {_n(s.get("heuristic_confidence", 0))},')
         lines.append(f'      {_k("reason")}: {_s(s.get("heuristic_reason", ""))}')
-        lines.append(f'    }},')
+        lines.append('    },')
         lines.append(f'    {_k("model_score")}: {_n(s.get("model_score", 0))},')
         lines.append(f'    {_k("requests")}: {_n(s.get("request_count", 0))},')
         dur = f"{s.get('duration', 0):.1f}"
@@ -293,7 +292,7 @@ def format_json_pretty(results: Dict[str, Any]) -> str:
     return '\n'.join(lines)
 
 
-def _format_json_pretty_probe(results: Dict, _k, _s, _n, _score_color, _label_color) -> str:
+def _format_json_pretty_probe(results: dict, _k, _s, _n, _score_color, _label_color) -> str:
     """Format probe results as colored JSON."""
     lines = []
     score = results.get('combined_score', 0)
@@ -315,7 +314,7 @@ def _format_json_pretty_probe(results: Dict, _k, _s, _n, _score_color, _label_co
     lines.append(f'    {_k("heuristic")}: {{')
     lines.append(f'      {_k("score")}: {_n(results.get("heuristic_score", 0))},')
     lines.append(f'      {_k("reason")}: {_s(results.get("heuristic_reason", ""))}')
-    lines.append(f'    }},')
+    lines.append('    },')
     ms = results.get('model_score', 0)
     lines.append(f'    {_k("model")}: {_n(ms)}')
     lines.append('  },')
@@ -345,7 +344,7 @@ def _format_json_pretty_probe(results: Dict, _k, _s, _n, _score_color, _label_co
     return '\n'.join(lines)
 
 
-def format_html(results: Dict[str, Any]) -> str:
+def format_html(results: dict[str, Any]) -> str:
     """Format results as a shareable HTML report.
     
     Args:
@@ -368,15 +367,12 @@ def format_html(results: Dict[str, Any]) -> str:
     
     # Determine status level
     if bot_rate < 0.1:
-        status_level = 'good'
         status_text = 'Healthy'
         status_color = '#10b981'
     elif bot_rate < 0.3:
-        status_level = 'warning'
         status_text = 'Warning'
         status_color = '#f59e0b'
     else:
-        status_level = 'danger'
         status_text = 'Critical'
         status_color = '#ef4444'
     
@@ -778,7 +774,7 @@ def format_html(results: Dict[str, Any]) -> str:
     return html
 
 
-def format_verbose(results: Dict[str, Any]) -> str:
+def format_verbose(results: dict[str, Any]) -> str:
     """Format results with full feature vectors and heuristic rule details.
     
     Args:
@@ -876,7 +872,7 @@ def format_verbose(results: Dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def print_report(results: Dict[str, Any], fmt: str = 'terminal'):
+def print_report(results: dict[str, Any], fmt: str = 'terminal'):
     """Print report to stdout.
     
     Args:

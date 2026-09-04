@@ -6,23 +6,22 @@ applies heuristic labels, and trains the micrograd MLP.
 
 import json
 import os
-import sys
 import random
-from typing import List, Tuple
+import sys
 
 # Add parent directory to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from microguard.parser import parse_file, parse_string, LogEntry
-from microguard.features import group_into_sessions, extract_features, Session
+from microguard.features import extract_features, group_into_sessions
 from microguard.labeler import label_session
 from microguard.model import BotDetector
+from microguard.parser import LogEntry, parse_file
 
 
 def prepare_training_data(
-    log_entries: List[LogEntry],
+    log_entries: list[LogEntry],
     timeout_minutes: int = 30,
-) -> Tuple[List[List[float]], List[float]]:
+) -> tuple[list[list[float]], list[float]]:
     """Convert log entries into training data.
     
     Args:
@@ -46,7 +45,7 @@ def prepare_training_data(
         features = extract_features(session)
         
         # Get label
-        label_str, confidence, reason = label_session(session)
+        label_str, _confidence, _reason = label_session(session)
         label = 1.0 if label_str == 'bot' else 0.0
         
         features_list.append(features)
@@ -55,7 +54,7 @@ def prepare_training_data(
     return features_list, labels_list
 
 
-def compute_normalization(features: List[List[float]]) -> Tuple[List[float], List[float]]:
+def compute_normalization(features: list[list[float]]) -> tuple[list[float], list[float]]:
     """Compute min/max normalization parameters from feature vectors.
     
     Args:
@@ -70,19 +69,17 @@ def compute_normalization(features: List[List[float]]) -> Tuple[List[float], Lis
     
     for row in features:
         for i, v in enumerate(row):
-            if v < mins[i]:
-                mins[i] = v
-            if v > maxs[i]:
-                maxs[i] = v
+            mins[i] = min(mins[i], v)
+            maxs[i] = max(maxs[i], v)
     
     return mins, maxs
 
 
 def normalize_features(
-    features: List[List[float]],
-    mins: List[float],
-    maxs: List[float],
-) -> List[List[float]]:
+    features: list[list[float]],
+    mins: list[float],
+    maxs: list[float],
+) -> list[list[float]]:
     """Normalize features to [0, 1] range.
     
     Features with zero range (min == max) map to 0.5.
@@ -100,8 +97,8 @@ def normalize_features(
 
 
 def train_model(
-    features: List[List[float]],
-    labels: List[float],
+    features: list[list[float]],
+    labels: list[float],
     model_path: str = "data/model.json",
     epochs: int = 100,
     learning_rate: float = 0.05,
@@ -121,7 +118,7 @@ def train_model(
     Returns:
         Trained BotDetector
     """
-    print(f"\n🧠 Training model...")
+    print("\n🧠 Training model...")
     print(f"   Samples: {len(features)}")
     print(f"   Bot: {sum(labels):.0f} | Human: {len(labels) - sum(labels):.0f}")
     print(f"   Epochs: {epochs} | LR: {learning_rate}")
@@ -151,12 +148,12 @@ def train_model(
     # Shuffle data
     combined = list(zip(features, labels))
     random.shuffle(combined)
-    features, labels = zip(*combined)
-    features = list(features)
-    labels = list(labels)
-    
+    shuffled_features, shuffled_labels = zip(*combined)
+    features = list(shuffled_features)
+    labels = list(shuffled_labels)
+
     # Train
-    losses = model.train(
+    model.train(
         features=features,
         labels=labels,
         epochs=epochs,
@@ -256,10 +253,10 @@ def main():
     
     print("\n✅ Training complete!")
     print(f"   Model: {model}")
-    print(f"   Ready to use: microguard scan <logfile>")
+    print("   Ready to use: microguard scan <logfile>")
 
 
-def generate_synthetic_data(n_samples: int = 500) -> Tuple[List[List[float]], List[float]]:
+def generate_synthetic_data(n_samples: int = 500) -> tuple[list[list[float]], list[float]]:
     """Generate synthetic training data for initial model training.
     
     Creates realistic feature vectors for bots and humans based on

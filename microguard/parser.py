@@ -2,9 +2,9 @@
 
 import json
 import re
-from datetime import datetime
-from typing import Optional, Dict, Any, Iterator, TextIO
-
+from collections.abc import Iterator
+from datetime import datetime, timezone
+from typing import Any
 
 # Nginx combined log format regex
 # Example: 192.168.1.1 - - [24/Mar/2023:17:07:41 +0000] "GET /products HTTP/1.1" 200 1234 "https://example.com" "Mozilla/5.0 ..."
@@ -30,8 +30,15 @@ class LogEntry:
     """A single parsed log entry."""
     
     __slots__ = [
-        'ip', 'timestamp', 'method', 'url', 'status',
-        'size', 'referer', 'user_agent', 'raw_line'
+        'ip',
+        'method',
+        'raw_line',
+        'referer',
+        'size',
+        'status',
+        'timestamp',
+        'url',
+        'user_agent'
     ]
     
     def __init__(
@@ -56,7 +63,7 @@ class LogEntry:
         self.user_agent = user_agent
         self.raw_line = raw_line
     
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             'ip': self.ip,
             'timestamp': self.timestamp.isoformat(),
@@ -72,7 +79,7 @@ class LogEntry:
         return f"LogEntry({self.method} {self.url} {self.status} from {self.ip})"
 
 
-def parse_nginx_line(line: str) -> Optional[LogEntry]:
+def parse_nginx_line(line: str) -> LogEntry | None:
     """Parse a single Nginx combined log line."""
     line = line.strip()
     if not line:
@@ -83,14 +90,14 @@ def parse_nginx_line(line: str) -> Optional[LogEntry]:
         return None
     
     try:
-        timestamp = datetime.strptime(match.group('timestamp'), NGINX_TIME_FMT)
+        timestamp = datetime.strptime(match.group('timestamp'), NGINX_TIME_FMT)  # noqa: DTZ007 — NGINX_TIME_FMT includes %z, result is already tz-aware
     except ValueError:
         # Try without timezone
         try:
             timestamp = datetime.strptime(
-                match.group('timestamp').split()[0], 
+                match.group('timestamp').split()[0],
                 "%d/%b/%Y:%H:%M:%S"
-            )
+            ).replace(tzinfo=timezone.utc)
         except ValueError:
             return None
     
@@ -117,7 +124,7 @@ def parse_nginx_line(line: str) -> Optional[LogEntry]:
     )
 
 
-def parse_json_line(line: str) -> Optional[LogEntry]:
+def parse_json_line(line: str) -> LogEntry | None:
     """Parse a single JSON log line."""
     line = line.strip()
     if not line:
@@ -147,13 +154,15 @@ def parse_json_line(line: str) -> Optional[LogEntry]:
         "%Y-%m-%d %H:%M:%S",
     ]:
         try:
-            timestamp = datetime.strptime(ts_str, fmt)
+            timestamp = datetime.strptime(ts_str, fmt)  # noqa: DTZ007 — normalized to UTC below when naive
+            if timestamp.tzinfo is None:
+                timestamp = timestamp.replace(tzinfo=timezone.utc)
             break
         except ValueError:
             continue
-    
+
     if timestamp is None:
-        timestamp = datetime.now()
+        timestamp = datetime.now(timezone.utc)
     
     try:
         status = int(status)
@@ -180,26 +189,23 @@ def parse_json_line(line: str) -> Optional[LogEntry]:
 
 def detect_format(filepath: str) -> str:
     """Auto-detect log format by reading first few lines."""
-    try:
-        with open(filepath, 'r', errors='replace') as f:
-            for i, line in enumerate(f):
-                if i >= 10:
-                    break
-                line = line.strip()
-                if not line:
-                    continue
-                # Try JSON first
-                if line.startswith('{'):
-                    try:
-                        json.loads(line)
-                        return 'json'
-                    except json.JSONDecodeError:
-                        pass
-                # Try Nginx combined
-                if NGINX_COMBINED_RE.match(line):
-                    return 'nginx'
-    except FileNotFoundError:
-        raise
+    with open(filepath, 'r', errors='replace') as f:
+        for i, line in enumerate(f):
+            if i >= 10:
+                break
+            line = line.strip()
+            if not line:
+                continue
+            # Try JSON first
+            if line.startswith('{'):
+                try:
+                    json.loads(line)
+                    return 'json'
+                except json.JSONDecodeError:
+                    pass
+            # Try Nginx combined
+            if NGINX_COMBINED_RE.match(line):
+                return 'nginx'
     return 'unknown'
 
 
@@ -220,7 +226,7 @@ def parse_file(filepath: str, fmt: str = 'auto') -> Iterator[LogEntry]:
     
     try:
         with open(filepath, 'r', errors='replace') as f:
-            for line_num, line in enumerate(f, 1):
+            for line in f:
                 entry = parser(line)
                 if entry is not None:
                     yield entry

@@ -5,11 +5,9 @@ Labels are noisy but good enough for pre-training. Retrain on real data later.
 """
 
 import re
-from typing import List, Tuple
 
+from .features import BROWSER_UA_RE, Session
 from .parser import LogEntry
-from .features import Session, extract_features, BOT_UA_RE, BROWSER_UA_RE
-
 
 # High-confidence bot user agent patterns
 HIGH_CONFIDENCE_BOT_PATTERNS = [
@@ -92,7 +90,7 @@ ATTACK_TOOL_UA_PATTERNS = [
 ATTACK_TOOL_RE = re.compile('|'.join(ATTACK_TOOL_UA_PATTERNS), re.IGNORECASE)
 
 
-def _check_cloudflare_signals(session: Session) -> Tuple[bool, str]:
+def _check_cloudflare_signals(session: Session) -> tuple[bool, str]:
     """Check for Cloudflare WAF bypass or protection signals.
     
     Returns:
@@ -118,7 +116,7 @@ def _check_cloudflare_signals(session: Session) -> Tuple[bool, str]:
     return False, ''
 
 
-def _check_api_key_patterns(session: Session) -> Tuple[bool, str]:
+def _check_api_key_patterns(session: Session) -> tuple[bool, str]:
     """Check for API key scanning or credential brute-force patterns.
     
     Returns:
@@ -153,7 +151,7 @@ def _check_api_key_patterns(session: Session) -> Tuple[bool, str]:
     return False, ''
 
 
-def _check_botnet_signatures(session: Session) -> Tuple[bool, str]:
+def _check_botnet_signatures(session: Session) -> tuple[bool, str]:
     """Check for known botnet and attack tool signatures.
     
     Returns:
@@ -178,14 +176,14 @@ def _check_botnet_signatures(session: Session) -> Tuple[bool, str]:
         return True, f'directory brute-force ({errors_4xx}/{len(entries)} 4xx responses)'
     
     # User-agent rotation (common in distributed attacks)
-    ua_variants = set(e.user_agent for e in entries)
+    ua_variants = {e.user_agent for e in entries}
     if len(ua_variants) > min(10, session.request_count * 0.3):
         return True, f'UA rotation ({len(ua_variants)} variants in {session.request_count} requests)'
     
     return False, ''
 
 
-def label_session(session: Session) -> Tuple[str, float, str]:
+def label_session(session: Session) -> tuple[str, float, str]:
     """Label a session as 'bot' or 'human' with confidence.
     
     Returns:
@@ -228,9 +226,8 @@ def label_session(session: Session) -> Tuple[str, float, str]:
                 return 'bot', 0.90, f'uniform timing (avg {avg_gap:.3f}s, near-zero variance)'
     
     # 4. HTTP/1.0 only (no modern browser uses this)
-    if all(e.raw_line and 'HTTP/1.0' in e.raw_line for e in entries):
-        if session.request_count > 5:
-            return 'bot', 0.90, 'all requests use HTTP/1.0 (not a modern browser)'
+    if all(e.raw_line and 'HTTP/1.0' in e.raw_line for e in entries) and session.request_count > 5:
+        return 'bot', 0.90, 'all requests use HTTP/1.0 (not a modern browser)'
     
     # 5. Cloudflare WAF bypass / protected endpoint scanning
     cf_bot, cf_reason = _check_cloudflare_signals(session)
@@ -288,9 +285,8 @@ def label_session(session: Session) -> Tuple[str, float, str]:
     # === LOW CONFIDENCE BOT SIGNALS (0.55-0.69) ===
     
     # 11. Unknown user agent (not a known browser)
-    if ua and ua != '-' and not BROWSER_UA_RE.search(ua):
-        if session.request_count > 5:
-            return 'bot', 0.60, f'unknown user-agent: {session.user_agent[:50]}'
+    if ua and ua != '-' and not BROWSER_UA_RE.search(ua) and session.request_count > 5:
+        return 'bot', 0.60, f'unknown user-agent: {session.user_agent[:50]}'
     
     # 12. Very short session with many requests (< 5 seconds, > 20 requests)
     if session.duration < 5.0 and session.request_count > 20:
@@ -304,9 +300,8 @@ def label_session(session: Session) -> Tuple[str, float, str]:
     # === HUMAN SIGNALS (0.55-0.75) ===
     
     # 15. Known browser user agent with normal behavior
-    if BROWSER_UA_RE.search(ua):
-        if session.request_count < 50 and session.duration > 30:
-            return 'human', 0.75, f'known browser, reasonable session ({session.request_count} req, {session.duration:.0f}s)'
+    if BROWSER_UA_RE.search(ua) and session.request_count < 50 and session.duration > 30:
+        return 'human', 0.75, f'known browser, reasonable session ({session.request_count} req, {session.duration:.0f}s)'
     
     # 16. Variable timing pattern (high CV)
     if session.request_count >= 3:
@@ -329,9 +324,8 @@ def label_session(session: Session) -> Tuple[str, float, str]:
         return 'human', 0.60, f'natural navigation with {has_referer} referrers'
     
     # 19. Behind Cloudflare with normal browser (likely real user)
-    if CLOUDFLARE_BYPASS_RE.search(ua) and BROWSER_UA_RE.search(ua):
-        if session.request_count < 30:
-            return 'human', 0.65, 'Cloudflare-protected site, normal browser'
+    if CLOUDFLARE_BYPASS_RE.search(ua) and BROWSER_UA_RE.search(ua) and session.request_count < 30:
+        return 'human', 0.65, 'Cloudflare-protected site, normal browser'
     
     # === DEFAULT ===
     
@@ -340,9 +334,9 @@ def label_session(session: Session) -> Tuple[str, float, str]:
 
 
 def label_entries(
-    entries: List[LogEntry],
+    entries: list[LogEntry],
     timeout_minutes: int = 30
-) -> List[Tuple[Session, str, float, str]]:
+) -> list[tuple[Session, str, float, str]]:
     """Label all sessions in a list of log entries.
     
     Returns:

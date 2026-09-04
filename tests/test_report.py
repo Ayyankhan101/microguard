@@ -1,10 +1,16 @@
 """Tests for the report module."""
 
-import pytest
 from microguard.report import (
-    score_label, score_label_color, _score_bar, _colorize,
-    format_terminal, format_json, format_json_pretty, format_verbose,
-    format_html, print_report,
+    _colorize,
+    _score_bar,
+    format_html,
+    format_json,
+    format_json_pretty,
+    format_terminal,
+    format_verbose,
+    print_report,
+    score_label,
+    score_label_color,
 )
 
 

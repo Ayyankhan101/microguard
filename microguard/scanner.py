@@ -7,11 +7,11 @@ from the response. No external dependencies — uses stdlib only.
 import math
 import ssl
 import time
-import urllib.request
 import urllib.error
-from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Tuple
+import urllib.request
 from collections import Counter
+from dataclasses import dataclass, field
+
 from .report import score_label, score_label_color
 
 
@@ -20,19 +20,19 @@ class ProbeResult:
     """Result of probing a single URL."""
     url: str
     status_code: int = 0
-    headers: Dict[str, str] = field(default_factory=dict)
+    headers: dict[str, str] = field(default_factory=dict)
     body: bytes = b""
-    timing: Dict[str, float] = field(default_factory=dict)
-    error: Optional[str] = None
+    timing: dict[str, float] = field(default_factory=dict)
+    error: str | None = None
     
     # Extracted features (populated by extract_probe_features)
-    features: Dict[str, float] = field(default_factory=dict)
+    features: dict[str, float] = field(default_factory=dict)
     
     @property
     def body_text(self) -> str:
         try:
             return self.body.decode('utf-8', errors='replace')
-        except Exception:
+        except Exception:  # noqa: BLE001 — malformed bytes fall back to empty string
             return ""
 
 
@@ -52,7 +52,7 @@ def _shannon_entropy(data) -> float:
     return entropy
 
 
-def _timing_pattern_consistency(timings: List[float]) -> float:
+def _timing_pattern_consistency(timings: list[float]) -> float:
     """Measure consistency of timing pattern (low CV = bot-like)."""
     if len(timings) < 2:
         return 0.0
@@ -72,7 +72,7 @@ def probe_url(
     user_agent: str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     follow_redirects: bool = True,
     verify_ssl: bool = True,
-    headers: Optional[Dict[str, str]] = None,
+    headers: dict[str, str] | None = None,
 ) -> ProbeResult:
     """Probe a live URL and capture response details.
     
@@ -114,7 +114,7 @@ def probe_url(
         ctx = ssl.create_default_context()
     
     # Build opener with handlers
-    handlers = []
+    handlers: list[urllib.request.BaseHandler] = []
     
     # HTTPS handler with SSL context
     https_handler = urllib.request.HTTPSHandler(context=ctx)
@@ -167,7 +167,7 @@ def probe_url(
             result.error = str(e.reason)
             result.timing = {'total': time.time() - t_start}
     
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — probe result surfaces any failure via result.error
         result.error = str(e)
         result.timing = {'total': time.time() - t_start}
     
@@ -182,7 +182,7 @@ def probe_url_multiple(
     timeout: float = 10.0,
     user_agent: str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     randomize_ua: bool = False,
-) -> List[ProbeResult]:
+) -> list[ProbeResult]:
     """Probe a URL multiple times to detect timing patterns.
     
     Args:
@@ -217,7 +217,7 @@ def probe_url_multiple(
     return results
 
 
-def extract_probe_features(results: List[ProbeResult]) -> Dict[str, float]:
+def extract_probe_features(results: list[ProbeResult]) -> dict[str, float]:
     """Extract bot-detection features from probe results.
     
     Features extracted:
@@ -288,8 +288,7 @@ def extract_probe_features(results: List[ProbeResult]) -> Dict[str, float]:
     # --- Bot signal features ---
     # Check for common bot detection headers
     server = headers_lower.get('server', '').lower()
-    powered_by = headers_lower.get('x-powered-by', '').lower()
-    
+
     # Bot-friendly servers (Cloudflare, etc.) tend to block bots
     features['server_bot_score'] = 0.0
     if 'cloudflare' in server or 'akamai' in server:
@@ -310,7 +309,7 @@ def probe_and_analyze(
     delay: float = 0.0,
     threshold: float = 0.7,
     verbose: bool = False,
-) -> Dict:
+) -> dict:
     """Probe a URL and analyze for bot-detection signals.
     
     Args:
@@ -378,9 +377,9 @@ def probe_and_analyze(
 
 
 def _analyze_probes(
-    results: List[ProbeResult],
-    features: Dict[str, float],
-) -> Tuple[float, str]:
+    results: list[ProbeResult],
+    features: dict[str, float],
+) -> tuple[float, str]:
     """Analyze probe results with heuristic rules.
     
     Returns:
@@ -447,7 +446,7 @@ def _analyze_probes(
     return 0.3, 'no strong bot signals detected'
 
 
-def format_probe_verbose(result: Dict) -> str:
+def format_probe_verbose(result: dict) -> str:
     """Format probe result with full feature details and rule analysis.
     
     Args:
@@ -483,7 +482,7 @@ def format_probe_verbose(result: Dict) -> str:
         score_ansi = '\033[92m'
         icon = '✅'
     
-    from .report import score_label, score_label_color
+    from .report import score_label
     risk = score_label(score)
     
     lines.append(f"  🌐 Target:    {result['url']}")
@@ -512,9 +511,7 @@ def format_probe_verbose(result: Dict) -> str:
         
         for name, val in features.items():
             # Add context for key features
-            if name == 'response_time':
-                note = f'{val*1000:.0f}ms'
-            elif name == 'ttfb':
+            if name == 'response_time' or name == 'ttfb':
                 note = f'{val*1000:.0f}ms'
             elif name == 'timing_cv':
                 if val < 0.05:
@@ -559,7 +556,7 @@ def format_probe_verbose(result: Dict) -> str:
     return '\n'.join(lines)
 
 
-def format_probe_report(result: Dict) -> str:
+def format_probe_report(result: dict) -> str:
     """Format probe result for terminal output.
     
     Args:
@@ -646,7 +643,7 @@ def format_probe_report(result: Dict) -> str:
     return '\n'.join(lines)
 
 
-def format_probe_html(result: Dict) -> str:
+def format_probe_html(result: dict) -> str:
     """Format probe result as HTML report.
     
     Args:
@@ -656,8 +653,7 @@ def format_probe_html(result: Dict) -> str:
         Complete HTML document string
     """
     score = result['combined_score']
-    label = result['label']
-    
+
     if score > 0.7:
         status_color = '#ef4444'
         status_text = 'BOT DETECTED'
@@ -845,7 +841,7 @@ def format_probe_html(result: Dict) -> str:
     return html
 
 
-def _probe_features_to_vector(features: Dict[str, float]) -> List[float]:
+def _probe_features_to_vector(features: dict[str, float]) -> list[float]:
     """Convert probe features dict to a vector for the ML model.
     
     Maps probe features to the 19-feature model input format.

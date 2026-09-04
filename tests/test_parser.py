@@ -1,12 +1,15 @@
 """Tests for the log parser module."""
 
-import pytest
-from datetime import datetime
-from microguard.parser import (
-    parse_nginx_line, parse_json_line, detect_format, 
-    parse_file, parse_string, LogEntry
-)
 
+import pytest
+
+from microguard.parser import (
+    detect_format,
+    parse_file,
+    parse_json_line,
+    parse_nginx_line,
+    parse_string,
+)
 
 # Sample Nginx combined log lines
 NGINX_HUMAN = (

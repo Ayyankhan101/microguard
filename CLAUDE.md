@@ -24,6 +24,14 @@ microguard scan <logfile>            # Scan log file
 microguard probe <url>               # Probe live URL
 ```
 
+## Health Stack
+
+- typecheck: mypy microguard
+- lint: ruff check .
+- test: pytest
+- deadcode: vulture microguard microguard/vulture_whitelist.py
+- shell: skip (no shell scripts)
+
 ## Skill routing
 
 When the user's request matches an available skill, invoke it via the Skill tool. When in doubt, invoke the skill.

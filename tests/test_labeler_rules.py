@@ -3,16 +3,18 @@
 Tests Cloudflare WAF detection, API key patterns, and botnet signatures.
 """
 
-import pytest
-from datetime import datetime, timedelta
-from microguard.parser import LogEntry
+from datetime import datetime, timedelta, timezone
+
 from microguard.features import Session
 from microguard.labeler import (
-    label_session, label_entries,
-    CLOUDFLARE_BYPASS_RE, API_KEY_SCAN_RE, BOTNET_URL_RE,
-    ATTACK_TOOL_RE, BRUTE_FORCE_ENDPOINTS,
-    _check_cloudflare_signals, _check_api_key_patterns, _check_botnet_signatures,
+    API_KEY_SCAN_RE,
+    ATTACK_TOOL_RE,
+    BOTNET_URL_RE,
+    CLOUDFLARE_BYPASS_RE,
+    label_entries,
+    label_session,
 )
+from microguard.parser import LogEntry
 
 
 def _make_entry(
@@ -26,7 +28,7 @@ def _make_entry(
     user_agent="Mozilla/5.0",
 ):
     if timestamp is None:
-        timestamp = datetime(2023, 3, 24, 17, 0, 0)
+        timestamp = datetime(2023, 3, 24, 17, 0, 0, tzinfo=timezone.utc)
     return LogEntry(
         ip=ip, timestamp=timestamp, method=method, url=url,
         status=status, size=size, referer=referer, user_agent=user_agent,
@@ -60,7 +62,7 @@ class TestCloudflareWAF:
             "10.0.0.1", "Incapsula-Inspector",
             [_make_entry(ip="10.0.0.1", url="/api", user_agent="Incapsula-Inspector")]
         )
-        label, conf, reason = label_session(session)
+        label, conf, _reason = label_session(session)
         assert label == 'bot'
         assert conf >= 0.85
 
@@ -74,7 +76,7 @@ class TestCloudflareWAF:
                 referer="-",
             ))
         session = _make_session("10.0.0.1", "SomeCustomTool/1.0", entries)
-        label, conf, reason = label_session(session)
+        label, _conf, _reason = label_session(session)
         # Should be caught by either WAF or scanner pattern
         assert label == 'bot'
 
@@ -99,14 +101,14 @@ class TestAPIKeyPatterns:
                 user_agent="python-requests/2.28.0",
             ))
         session = _make_session("10.0.0.1", "python-requests/2.28.0", entries)
-        label, conf, reason = label_session(session)
+        label, conf, _reason = label_session(session)
         assert label == 'bot'
         # Should be caught by either API key or bot UA
         assert conf >= 0.70
 
     def test_credential_brute_force(self):
         entries = []
-        base_time = datetime(2023, 3, 24, 17, 0, 0)
+        base_time = datetime(2023, 3, 24, 17, 0, 0, tzinfo=timezone.utc)
         for i in range(15):
             entries.append(_make_entry(
                 ip="10.0.0.1",
@@ -115,7 +117,7 @@ class TestAPIKeyPatterns:
                 user_agent="Mozilla/5.0",
             ))
         session = _make_session("10.0.0.1", "Mozilla/5.0", entries)
-        label, conf, reason = label_session(session)
+        label, _conf, _reason = label_session(session)
         assert label == 'bot'
 
     def test_api_key_regex_matches(self):
@@ -136,7 +138,7 @@ class TestBotnetSignatures:
             "10.0.0.1", "Nuclei - Open-source project",
             [_make_entry(ip="10.0.0.1", url="/vuln", user_agent="Nuclei - Open-source project")]
         )
-        label, conf, reason = label_session(session)
+        label, conf, _reason = label_session(session)
         assert label == 'bot'
         assert conf >= 0.85
 
@@ -149,12 +151,12 @@ class TestBotnetSignatures:
                 user_agent="Go-http-client/1.1",
             ))
         session = _make_session("185.220.101.1", "Go-http-client/1.1", entries)
-        label, conf, reason = label_session(session)
+        label, _conf, _reason = label_session(session)
         assert label == 'bot'
 
     def test_directory_brute_force(self):
         entries = []
-        base_time = datetime(2023, 3, 24, 17, 0, 0)
+        base_time = datetime(2023, 3, 24, 17, 0, 0, tzinfo=timezone.utc)
         dirs = ["/admin", "/backup", "/config", "/debug", "/env", "/git",
                 "/hidden", "/private", "/secret", "/test", "/tmp",
                 "/wp-admin", "/phpmyadmin", "/.env", "/config.json"]
@@ -167,12 +169,12 @@ class TestBotnetSignatures:
                 user_agent="Go-http-client/1.1",
             ))
         session = _make_session("91.189.88.162", "Go-http-client/1.1", entries)
-        label, conf, reason = label_session(session)
+        label, _conf, _reason = label_session(session)
         assert label == 'bot'
 
     def test_ua_rotation(self):
         entries = []
-        base_time = datetime(2023, 3, 24, 17, 0, 0)
+        base_time = datetime(2023, 3, 24, 17, 0, 0, tzinfo=timezone.utc)
         for i in range(20):
             entries.append(_make_entry(
                 ip="10.0.0.1",
@@ -181,7 +183,7 @@ class TestBotnetSignatures:
                 user_agent=f"Bot{i}/1.0",
             ))
         session = _make_session("10.0.0.1", "Bot0/1.0", entries)
-        label, conf, reason = label_session(session)
+        label, _conf, _reason = label_session(session)
         assert label == 'bot'
 
     def test_botnet_regex_matches(self):
@@ -206,7 +208,7 @@ class TestHumanSignals:
 
     def test_known_browser_normal_session(self):
         entries = []
-        base_time = datetime(2023, 3, 24, 17, 0, 0)
+        base_time = datetime(2023, 3, 24, 17, 0, 0, tzinfo=timezone.utc)
         for i in range(10):
             entries.append(_make_entry(
                 ip="192.168.1.1",
@@ -220,12 +222,12 @@ class TestHumanSignals:
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             entries,
         )
-        label, conf, reason = label_session(session)
+        label, _conf, _reason = label_session(session)
         assert label == 'human'
 
     def test_variable_timing_human(self):
         entries = []
-        base_time = datetime(2023, 3, 24, 17, 0, 0)
+        base_time = datetime(2023, 3, 24, 17, 0, 0, tzinfo=timezone.utc)
         # Very variable timing
         delays = [0.5, 5.0, 0.2, 10.0, 0.3, 8.0, 0.1, 3.0, 7.0, 0.4]
         for i, delay in enumerate(delays):
@@ -240,7 +242,7 @@ class TestHumanSignals:
             "Mozilla/5.0 Chrome/120.0.0.0",
             entries,
         )
-        label, conf, reason = label_session(session)
+        label, conf, _reason = label_session(session)
         # Variable timing is a human signal
         assert label == 'human' or conf < 0.6
 
@@ -252,7 +254,7 @@ class TestEdgeCases:
 
     def test_empty_session(self):
         session = Session("10.0.0.1", "")
-        label, conf, reason = label_session(session)
+        label, conf, _reason = label_session(session)
         assert label == 'human'
         assert conf == 0.5
 
@@ -261,12 +263,12 @@ class TestEdgeCases:
             "10.0.0.1", "python-requests/2.28.0",
             [_make_entry(ip="10.0.0.1", user_agent="python-requests/2.28.0")]
         )
-        label, conf, reason = label_session(session)
+        label, _conf, _reason = label_session(session)
         assert label == 'bot'
 
     def test_label_entries_batch(self):
         entries = []
-        base_time = datetime(2023, 3, 24, 17, 0, 0)
+        base_time = datetime(2023, 3, 24, 17, 0, 0, tzinfo=timezone.utc)
         for i in range(20):
             entries.append(_make_entry(
                 ip="192.168.1.1",

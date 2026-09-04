@@ -11,12 +11,10 @@ Implements 19 features based on Nescio98 research + original plan:
 
 import math
 import re
-from collections import Counter, defaultdict
+from collections import Counter
 from datetime import datetime, timedelta
-from typing import List, Dict, Optional
 
 from .parser import LogEntry
-
 
 # Known bot user agent patterns (case-insensitive)
 BOT_UA_PATTERNS = [
@@ -59,7 +57,7 @@ def _shannon_entropy(data: str) -> float:
     return entropy
 
 
-def _coefficient_of_variation(values: List[float]) -> float:
+def _coefficient_of_variation(values: list[float]) -> float:
     """Calculate coefficient of variation (std/mean)."""
     if len(values) < 2:
         return 0.0
@@ -81,7 +79,7 @@ def _url_depth(url: str) -> int:
     return len(segments)
 
 
-def _url_width(urls: List[str]) -> int:
+def _url_width(urls: list[str]) -> int:
     """Calculate URL space width (unique path branches at depth 1)."""
     branches = set()
     for url in urls:
@@ -98,9 +96,9 @@ class Session:
     def __init__(self, ip: str, user_agent: str = ""):
         self.ip = ip
         self.user_agent = user_agent
-        self.requests: List[LogEntry] = []
-        self.start_time: Optional[datetime] = None
-        self.end_time: Optional[datetime] = None
+        self.requests: list[LogEntry] = []
+        self.start_time: datetime | None = None
+        self.end_time: datetime | None = None
     
     def add_request(self, entry: LogEntry):
         self.requests.append(entry)
@@ -122,17 +120,17 @@ class Session:
 
 
 def group_into_sessions(
-    entries: List[LogEntry],
+    entries: list[LogEntry],
     timeout_minutes: int = 30
-) -> List[Session]:
+) -> list[Session]:
     """Group log entries into sessions by IP.
     
     A new session starts when:
     - A new IP appears
     - More than timeout_minutes pass between requests
     """
-    all_sessions: List[Session] = []
-    last_session_by_ip: Dict[str, Session] = {}
+    all_sessions: list[Session] = []
+    last_session_by_ip: dict[str, Session] = {}
     
     for entry in sorted(entries, key=lambda e: e.timestamp):
         ip = entry.ip
@@ -157,7 +155,7 @@ def group_into_sessions(
     return all_sessions
 
 
-def extract_features(session: Session) -> List[float]:
+def extract_features(session: Session) -> list[float]:
     """Extract 19 features from a session.
     
     Returns a list of 19 floats, ready for model input.
@@ -231,7 +229,7 @@ def extract_features(session: Session) -> List[float]:
     
     # 10. header_consistency_score (0-1, how consistent are headers)
     # Based on User-Agent consistency across requests
-    ua_variants = set(e.user_agent for e in entries)
+    ua_variants = {e.user_agent for e in entries}
     header_consistency = 1.0 / len(ua_variants) if ua_variants else 0.0
     
     # 11. has_accept_language (1 if present, 0 if not)

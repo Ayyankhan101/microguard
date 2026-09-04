@@ -9,14 +9,13 @@ import argparse
 import json
 import os
 import sys
-from typing import List, Dict, Any
+from typing import Any
 
-from .parser import parse_file, LogEntry
-from .features import group_into_sessions, extract_features, FEATURE_NAMES
+from .features import FEATURE_NAMES, extract_features, group_into_sessions
 from .labeler import label_session
 from .model import BotDetector
-from .report import print_report, format_terminal, format_json
-
+from .parser import LogEntry, parse_file
+from .report import print_report
 
 # Default threshold for bot classification
 DEFAULT_THRESHOLD = 0.7
@@ -33,7 +32,7 @@ def scan_logfile(
     threshold: float = DEFAULT_THRESHOLD,
     model_path: str = DEFAULT_MODEL_PATH,
     timeout_minutes: int = 30,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Scan a log file for bot traffic.
     
     Args:
@@ -49,9 +48,7 @@ def scan_logfile(
     # Parse log file
     print(f"📂 Parsing {filepath}...", file=sys.stderr)
     
-    entries: List[LogEntry] = []
-    for entry in parse_file(filepath, fmt):
-        entries.append(entry)
+    entries: list[LogEntry] = list(parse_file(filepath, fmt))
     
     if not entries:
         return {
@@ -76,12 +73,12 @@ def scan_logfile(
     if model_available:
         try:
             model = BotDetector(model_path)
-            print(f"🧠 Loaded pre-trained model", file=sys.stderr)
-        except Exception as e:
+            print("🧠 Loaded pre-trained model", file=sys.stderr)
+        except Exception as e:  # noqa: BLE001 — model load is best-effort, falls back to heuristics
             print(f"⚠️  Could not load model: {e}", file=sys.stderr)
-            print(f"   Falling back to heuristic rules only", file=sys.stderr)
+            print("   Falling back to heuristic rules only", file=sys.stderr)
     else:
-        print(f"📋 No pre-trained model found, using heuristic rules", file=sys.stderr)
+        print("📋 No pre-trained model found, using heuristic rules", file=sys.stderr)
     
     # Analyze each session
     session_results = []
@@ -351,7 +348,7 @@ def main():
             from .report import format_json_pretty
             print(format_json_pretty(results))
         elif args.output_file:
-            from .report import format_terminal, format_json, format_html
+            from .report import format_html, format_json, format_terminal
             if args.output == 'html':
                 content = format_html(results)
             elif args.output == 'json':
@@ -372,7 +369,7 @@ def main():
             sys.exit(0)
     
     elif args.command == 'probe':
-        from .scanner import probe_and_analyze, format_probe_report
+        from .scanner import format_probe_report, probe_and_analyze
         
         # Load model
         model = None
@@ -380,7 +377,7 @@ def main():
         if model_available:
             try:
                 model = BotDetector(args.model)
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 — model load is best-effort, falls back to heuristics
                 print(f"⚠️  Could not load model: {e}", file=sys.stderr)
         
         # Run probe analysis
@@ -424,12 +421,12 @@ def main():
     elif args.command == 'info':
         print("🔍 Microguard v0.1.0")
         print("   Bot Traffic Audit Tool powered by micrograd")
-        print("")
+        print()
         print("   Usage:")
         print("     microguard scan <logfile>    Scan a log file for bot traffic")
         print("     microguard probe <url>       Probe a live URL for bot signals")
         print("   Docs:  https://github.com/yourusername/microguard")
-        print("")
+        print()
         print("   Features:")
         print("   • 19 HTTP-level features for bot detection")
         print("   • micrograd neural network (85 parameters, ~1.8KB)")
@@ -449,7 +446,7 @@ def main():
             print("   Powered by micrograd")
             print()
             print("   No command specified. Running sample scan...")
-            print(f"   (Scan your own logs with: microguard scan <logfile>)")
+            print("   (Scan your own logs with: microguard scan <logfile>)")
             print()
             
             results = scan_logfile(

@@ -1,13 +1,13 @@
 """Tests for microguard.scanner module."""
 
 import pytest
+
 from microguard.scanner import (
-    probe_url,
-    probe_url_multiple,
-    extract_probe_features,
-    format_probe_report,
     _shannon_entropy,
     _timing_pattern_consistency,
+    extract_probe_features,
+    format_probe_report,
+    probe_url,
 )
 
 

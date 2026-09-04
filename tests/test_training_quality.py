@@ -9,6 +9,7 @@ Validates:
 import json
 import math
 import os
+
 import pytest
 
 DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'data')
@@ -278,8 +279,8 @@ class TestModelAccuracy:
 
         for feat in data['features']:
             score = model.predict(feat)
-            assert score != 0.0, f"Score is exactly 0.0 (overconfident)"
-            assert score != 1.0, f"Score is exactly 1.0 (overconfident)"
+            assert score != 0.0, "Score is exactly 0.0 (overconfident)"
+            assert score != 1.0, "Score is exactly 1.0 (overconfident)"
 
 
 # ---------------------------------------------------------------------------
@@ -308,7 +309,6 @@ class TestCrossDataset:
     def test_model_handles_zero_range_features(self):
         """Features 8, 13, 16 (zero range) should produce valid scores."""
         model = _load_model()
-        norm = _load_normalization()
 
         # Create a feature vector with zero-range features set to 0
         feat = [0.5] * 19

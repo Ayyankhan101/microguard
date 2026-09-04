@@ -1,7 +1,8 @@
 """Tests for the micrograd model wrapper."""
 
+
 import pytest
-import math
+
 from microguard.model import BotDetector
 
 

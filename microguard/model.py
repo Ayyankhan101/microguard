@@ -8,7 +8,6 @@ Output: 0.0 (human) to 1.0 (bot)
 import json
 import math
 import os
-from typing import List, Optional, Tuple
 
 # Import micrograd
 try:
@@ -34,7 +33,7 @@ class BotDetector:
     
     NUM_FEATURES = 19
     
-    def __init__(self, model_path: Optional[str] = None):
+    def __init__(self, model_path: str | None = None):
         """Initialize the bot detector.
         
         Args:
@@ -58,7 +57,7 @@ class BotDetector:
                 self.norm_mins = norm_data['mins']
                 self.norm_maxs = norm_data['maxs']
     
-    def predict(self, features: List[float]) -> float:
+    def predict(self, features: list[float]) -> float:
         """Predict bot probability for a single feature vector.
         
         Args:
@@ -101,7 +100,7 @@ class BotDetector:
         
         return max(0.0, min(1.0, score))
     
-    def predict_batch(self, batch: List[List[float]]) -> List[float]:
+    def predict_batch(self, batch: list[list[float]]) -> list[float]:
         """Predict bot probability for a batch of feature vectors.
         
         Args:
@@ -114,8 +113,8 @@ class BotDetector:
     
     def train_step(
         self,
-        features_batch: List[List[float]],
-        labels: List[float],
+        features_batch: list[list[float]],
+        labels: list[float],
         learning_rate: float = 0.01
     ) -> float:
         """Perform one training step.
@@ -165,14 +164,14 @@ class BotDetector:
     
     def train(
         self,
-        features: List[List[float]],
-        labels: List[float],
+        features: list[list[float]],
+        labels: list[float],
         epochs: int = 100,
         batch_size: int = 32,
         learning_rate: float = 0.01,
         val_split: float = 0.2,
         verbose: bool = True
-    ) -> List[float]:
+    ) -> list[float]:
         """Train the model.
         
         Args:

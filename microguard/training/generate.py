@@ -6,13 +6,12 @@ Based on patterns from:
 - Real human behavior (browsing, shopping, researching)
 """
 
-import random
 import json
 import os
-from typing import List, Tuple
+import random
 
 
-def generate_human_session() -> List[float]:
+def generate_human_session() -> list[float]:
     """Generate feature vector for a realistic human session.
     
     Humans exhibit:
@@ -97,7 +96,7 @@ def generate_human_session() -> List[float]:
         ]
 
 
-def generate_bot_session() -> List[float]:
+def generate_bot_session() -> list[float]:
     """Generate feature vector for a realistic bot session.
     
     Bots exhibit:
@@ -211,7 +210,7 @@ def generate_dataset(
     n_samples: int = 2000,
     balance: float = 0.5,
     seed: int = 42,
-) -> Tuple[List[List[float]], List[float]]:
+) -> tuple[list[list[float]], list[float]]:
     """Generate a balanced dataset of human and bot sessions.
     
     Args:
@@ -241,14 +240,14 @@ def generate_dataset(
     # Shuffle
     combined = list(zip(features, labels))
     random.shuffle(combined)
-    features, labels = zip(*combined)
-    
-    return list(features), list(labels)
+    shuffled_features, shuffled_labels = zip(*combined)
+
+    return list(shuffled_features), list(shuffled_labels)
 
 
 def save_dataset(
-    features: List[List[float]],
-    labels: List[float],
+    features: list[list[float]],
+    labels: list[float],
     filepath: str,
 ):
     """Save dataset to JSON file."""

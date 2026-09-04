@@ -1,10 +1,10 @@
 """Tests for the heuristic labeler."""
 
-import pytest
-from datetime import datetime, timedelta
-from microguard.parser import LogEntry
+from datetime import datetime, timedelta, timezone
+
 from microguard.features import Session
-from microguard.labeler import label_session, label_entries
+from microguard.labeler import label_entries, label_session
+from microguard.parser import LogEntry
 
 
 def _make_session(
@@ -16,7 +16,7 @@ def _make_session(
 ) -> Session:
     """Create a test session with configurable behavior."""
     session = Session(ip, user_agent)
-    base_time = datetime(2023, 3, 24, 17, 0, 0)
+    base_time = datetime(2023, 3, 24, 17, 0, 0, tzinfo=timezone.utc)
     
     for i in range(num_requests):
         if timing == "uniform":
@@ -54,7 +54,7 @@ class TestLabelSession:
             user_agent="python-requests/2.28.0",
             num_requests=5
         )
-        label, confidence, reason = label_session(session)
+        label, confidence, _reason = label_session(session)
         assert label == 'bot'
         assert confidence >= 0.9
     
@@ -65,7 +65,7 @@ class TestLabelSession:
             num_requests=10,
             timing="variable"
         )
-        label, confidence, reason = label_session(session)
+        label, confidence, _reason = label_session(session)
         # Should lean human
         assert label == 'human' or confidence < 0.6
     
@@ -76,7 +76,7 @@ class TestLabelSession:
             num_requests=10,
             timing="uniform"
         )
-        label, confidence, reason = label_session(session)
+        label, confidence, _reason = label_session(session)
         # Uniform timing is a strong bot signal
         assert label == 'bot' or confidence > 0.5
     
@@ -87,13 +87,13 @@ class TestLabelSession:
             num_requests=15,
             same_url=True
         )
-        label, confidence, reason = label_session(session)
+        label, _confidence, _reason = label_session(session)
         assert label == 'bot'
-    
+
     def test_empty_session(self):
         """Empty session should default to human."""
         session = Session("192.168.1.1", "Mozilla/5.0")
-        label, confidence, reason = label_session(session)
+        label, _confidence, _reason = label_session(session)
         assert label == 'human'
     
     def test_unknown_ua_with_many_requests(self):
@@ -103,7 +103,7 @@ class TestLabelSession:
             num_requests=20,
             timing="variable"
         )
-        label, confidence, reason = label_session(session)
+        _label, confidence, _reason = label_session(session)
         # Unknown UA is a signal
         assert confidence >= 0.5
 
@@ -116,7 +116,7 @@ class TestLabelEntries:
         entries = [
             LogEntry(
                 ip="192.168.1.1",
-                timestamp=datetime(2023, 3, 24, 17, 0, i),
+                timestamp=datetime(2023, 3, 24, 17, 0, i, tzinfo=timezone.utc),
                 method="GET",
                 url=f"/page/{i}",
                 status=200,

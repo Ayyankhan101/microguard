@@ -1,9 +1,11 @@
 """Extended tests for the scanner module."""
 
-import pytest
 from microguard.scanner import (
-    ProbeResult, extract_probe_features, _analyze_probes,
-    format_probe_report, format_probe_verbose, _probe_features_to_vector,
+    ProbeResult,
+    _analyze_probes,
+    _probe_features_to_vector,
+    extract_probe_features,
+    format_probe_verbose,
 )
 
 
@@ -55,7 +57,7 @@ class TestAnalyzeProbes:
             headers={"Server": "nginx"},
             timing={"total": 0.5},  # Normal timing so slow rule doesn't fire first
         )
-        score, reason = _analyze_probes([result], {})
+        _score, reason = _analyze_probes([result], {})
         assert 'server error' in reason
 
     def test_very_fast_response(self):
@@ -65,7 +67,7 @@ class TestAnalyzeProbes:
             headers={"Server": "nginx"},
             timing={"total": 0.02},
         )
-        score, reason = _analyze_probes([result], {})
+        _score, reason = _analyze_probes([result], {})
         assert 'fast' in reason or 'cached' in reason
 
     def test_connection_error(self):
@@ -74,7 +76,7 @@ class TestAnalyzeProbes:
             error="Connection refused",
             timing={"total": 0.001},
         )
-        score, reason = _analyze_probes([result], {})
+        _score, reason = _analyze_probes([result], {})
         assert 'connection error' in reason
 
     def test_well_protected_site(self):

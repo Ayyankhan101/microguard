@@ -7,14 +7,13 @@ printing bot detections to the terminal in real time.
 import os
 import sys
 import time
-from datetime import datetime
-from typing import Optional
+from datetime import datetime, timezone
 
-from .parser import parse_nginx_line, parse_json_line, detect_format, LogEntry
-from .features import group_into_sessions, extract_features, FEATURE_NAMES, Session
+from .features import extract_features, group_into_sessions
 from .labeler import label_session
 from .model import BotDetector
-from .report import score_label, score_label_color, _colorize
+from .parser import LogEntry, detect_format, parse_json_line, parse_nginx_line
+from .report import _colorize, score_label, score_label_color
 
 
 def _read_new_lines(filepath: str, offset: int, fmt: str):
@@ -81,7 +80,7 @@ def watch_logfile(
     filepath: str,
     fmt: str = 'auto',
     threshold: float = 0.7,
-    model_path: Optional[str] = None,
+    model_path: str | None = None,
     interval: float = 2.0,
     session_timeout: int = 5,
 ):
@@ -98,7 +97,7 @@ def watch_logfile(
     # Validate file exists
     if not os.path.exists(filepath):
         print(f"❌ Error: Log file not found: {filepath}", file=sys.stderr)
-        print(f"   Waiting for file to appear...", file=sys.stderr)
+        print("   Waiting for file to appear...", file=sys.stderr)
     
     # Auto-detect format
     if fmt == 'auto' and os.path.exists(filepath):
@@ -111,8 +110,8 @@ def watch_logfile(
     if model_path and os.path.exists(model_path):
         try:
             model = BotDetector(model_path)
-        except Exception:
-            pass
+        except Exception as e:  # noqa: BLE001 — model load is best-effort in watch mode
+            print(f"⚠️  Could not load model: {e}", file=sys.stderr)
     
     # Stats
     total_scanned = 0
@@ -126,7 +125,7 @@ def watch_logfile(
     print(f"  Threshold:  {threshold}")
     print(f"  Model:      {'loaded' if model else 'heuristic only'}")
     print(f"  Polling:    every {interval}s")
-    print(f"  Press Ctrl+C to stop")
+    print("  Press Ctrl+C to stop")
     print(f"  {'─' * 55}")
     print()
     
@@ -147,7 +146,7 @@ def watch_logfile(
             if not entries or new_offset == offset:
                 # Periodic status update
                 if time.time() - last_report > 30:
-                    now = datetime.now().strftime('%H:%M:%S')
+                    now = datetime.now(timezone.utc).strftime('%H:%M:%S')
                     print(f"  [{now}] Watching... ({total_scanned} scanned, {total_bots} bots, {total_humans} human)")
                     last_report = time.time()
                 continue
@@ -190,7 +189,7 @@ def watch_logfile(
             
             # Periodic summary
             if time.time() - last_report > 30:
-                now = datetime.now().strftime('%H:%M:%S')
+                now = datetime.now(timezone.utc).strftime('%H:%M:%S')
                 bot_rate = total_bots / max(total_bots + total_humans, 1)
                 print(f"  [{now}] Stats: {total_scanned} scanned, "
                       f"{_colorize(str(total_bots), 'red')} bots, "
@@ -201,7 +200,7 @@ def watch_logfile(
     except KeyboardInterrupt:
         print()
         print(f"  {'─' * 55}")
-        print(f"  Watch stopped.")
+        print("  Watch stopped.")
         print(f"  Total: {total_scanned} entries scanned")
         print(f"  Bots:  {_colorize(str(total_bots), 'red')}")
         print(f"  Human: {_colorize(str(total_humans), 'green')}")

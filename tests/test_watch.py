@@ -1,13 +1,9 @@
 """Tests for the watch module."""
 
-import os
-import time
-import threading
-import pytest
-from datetime import datetime
-from microguard.watch import _read_new_lines, _format_detection
-from microguard.parser import LogEntry
+from datetime import datetime, timezone
 
+from microguard.parser import LogEntry
+from microguard.watch import _format_detection, _read_new_lines
 
 NGINX_LINE = (
     '192.168.1.100 - - [24/Mar/2023:17:07:41 +0000] '
@@ -37,7 +33,7 @@ class TestReadNewLines:
     def test_read_new_entries(self, tmp_path):
         log_file = tmp_path / "test.log"
         log_file.write_text(NGINX_HUMAN + "\n" + NGINX_BOT + "\n")
-        entries, offset = _read_new_lines(str(log_file), 0, 'nginx')
+        entries, _offset = _read_new_lines(str(log_file), 0, 'nginx')
         assert len(entries) == 2
         assert entries[0].ip == '192.168.1.100'
         assert entries[1].ip == '10.0.0.1'
@@ -60,7 +56,7 @@ class TestReadNewLines:
     def test_no_new_entries(self, tmp_path):
         log_file = tmp_path / "test.log"
         log_file.write_text(NGINX_HUMAN + "\n")
-        entries1, offset1 = _read_new_lines(str(log_file), 0, 'nginx')
+        _entries1, offset1 = _read_new_lines(str(log_file), 0, 'nginx')
         entries2, offset2 = _read_new_lines(str(log_file), offset1, 'nginx')
         assert entries2 == []
         assert offset2 == offset1
@@ -78,7 +74,7 @@ class TestReadNewLines:
             '"http_referer": "-", "http_user_agent": "python-requests/2.28.0"}'
         )
         log_file.write_text(json_line + "\n")
-        entries, offset = _read_new_lines(str(log_file), 0, 'json')
+        entries, _offset = _read_new_lines(str(log_file), 0, 'json')
         assert len(entries) == 1
         assert entries[0].ip == '10.0.0.1'
 
@@ -89,7 +85,7 @@ class TestFormatDetection:
     def test_bot_detection_format(self):
         entry = LogEntry(
             ip="10.0.0.1",
-            timestamp=datetime(2023, 3, 24, 17, 7, 41),
+            timestamp=datetime(2023, 3, 24, 17, 7, 41, tzinfo=timezone.utc),
             method="GET",
             url="/api/data",
             status=200,
@@ -109,7 +105,7 @@ class TestFormatDetection:
     def test_human_detection_format(self):
         entry = LogEntry(
             ip="192.168.1.1",
-            timestamp=datetime(2023, 3, 24, 17, 7, 41),
+            timestamp=datetime(2023, 3, 24, 17, 7, 41, tzinfo=timezone.utc),
             method="GET",
             url="/products",
             status=200,

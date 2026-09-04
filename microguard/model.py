@@ -26,9 +26,10 @@ class BotDetector:
     
     Architecture:
         Input: 19 features
-        Hidden 1: 16 neurons (ReLU)
-        Hidden 2: 8 neurons (ReLU)
-        Output: 1 neuron (sigmoid)
+        Hidden: 4 neurons (ReLU)
+        Output: 1 neuron (logit → sigmoid)
+    
+    Parameters: 85 total (19×4 + 4) + (4×1 + 1) = 76 + 5
     """
     
     NUM_FEATURES = 19
@@ -249,7 +250,7 @@ class BotDetector:
         
         data = {
             'num_features': self.NUM_FEATURES,
-            'architecture': [16, 8, 1],
+            'architecture': [4, 1],
             'weights': weights,
         }
         

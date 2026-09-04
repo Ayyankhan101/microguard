@@ -10,27 +10,29 @@ $ microguard scan access.log
   Microguard Bot Traffic Report
   ─────────────────────────────
 
-  🚨 Bot Traffic: 45.0%
+  🚨 Bot Traffic: 50.0%  CRITICAL
 
-  Total sessions:  128
-  Human sessions:  70
-  Bot sessions:    58
+  Total sessions:  4
+  Human sessions:  2
+  Bot sessions:    2
 
-  IP                    Score Label     Reqs Duration Top Endpoint
-  ──────────────────────────────────────────────────────────────────────
-  10.0.0.50            0.95 bot         1     0.0s /api/products
-  10.0.0.99            0.89 bot        47    12.3s /api/search
-  192.168.1.100        0.32 human       5    34.0s /
+  █████░░░░░  50.0%
+
+  IP                 Score Bar          Risk      Label    Reqs    Dur Heuristic Rule
+  ─────────────────────────────────────────────────────────────────────────────────────
+  10.0.0.50          0.95 █████████░ DANGER    bot     1   0.0s known bot/monitoring UA
+  192.168.1.100      0.39 ███░░░░░░░ LOW       human     5  34.0s known browser, reasonable session
 ```
 
 ## Features
 
 - **19 HTTP-level features** for bot detection (timing, behavioral, header analysis)
-- **micrograd neural network** — 465 parameters, ~5KB model size
-- **Heuristic rules + ML model** combined scoring for accuracy
+- **24 heuristic rules** across 4 confidence tiers (Cloudflare WAF, API key, botnet detection)
+- **micrograd neural network** — 85 parameters, ~1.8KB model size
 - **Live URL probing** — test endpoints directly, not just log files
-- **Streaming processing** — handles GB-sized log files without running out of memory
-- **Multiple output formats** — terminal, JSON, and HTML reports
+- **Continuous monitoring** — watch mode tails log files in real time
+- **Multiple output formats** — terminal, JSON, colored JSON, and HTML reports
+- **Score interpretation** — SAFE / LOW / WARNING / DANGER risk labels
 - **Zero external dependencies** — only requires micrograd
 
 ## Installation
@@ -50,13 +52,23 @@ pip install .
 ### Requirements
 
 - Python 3.8+
-- [micrograd](https://github.com/karpathy/micrograd)
-
-```bash
-pip install micrograd
-```
+- [micrograd](https://github.com/karpathy/micrograd) (installed automatically)
 
 ## Quick Start
+
+```bash
+# Run with no arguments — auto-scans a sample log file
+microguard
+
+# Scan your own logs
+microguard scan /var/log/nginx/access.log
+
+# Probe a live URL
+microguard probe https://example.com
+
+# Watch mode — continuously monitor a log file
+microguard scan access.log --watch
+```
 
 ### Scan a Log File
 
@@ -64,7 +76,13 @@ pip install micrograd
 # Basic scan
 microguard scan /var/log/nginx/access.log
 
-# With JSON output
+# Verbose output (feature vectors + heuristic rules)
+microguard scan access.log --verbose
+
+# Colored JSON for terminal reading
+microguard scan access.log --json-pretty
+
+# Machine-readable JSON
 microguard scan access.log --output json
 
 # Save HTML report
@@ -83,6 +101,9 @@ microguard probe https://example.com
 # Multiple probes for timing analysis
 microguard probe https://example.com --count 5
 
+# Verbose probe (full feature breakdown)
+microguard probe https://example.com --verbose
+
 # Save results as HTML
 microguard probe https://example.com --output html --output-file probe.html
 
@@ -90,46 +111,62 @@ microguard probe https://example.com --output html --output-file probe.html
 microguard probe https://example.com --user-agent "MyBot/1.0"
 ```
 
-## Usage
+### Continuous Monitoring
 
-### Command Line Interface
+```bash
+# Watch a log file for new bot traffic
+microguard scan access.log --watch
+
+# Lower threshold for more sensitivity
+microguard scan access.log --watch --threshold 0.5
+```
+
+## Score Interpretation
+
+| Score Range | Risk Level | Meaning |
+|-------------|------------|---------|
+| 0.00 - 0.30 | **SAFE** | No bot signals detected |
+| 0.31 - 0.59 | **LOW** | Minor signals, likely human |
+| 0.60 - 0.79 | **WARNING** | Suspicious, investigate |
+| 0.80 - 1.00 | **DANGER** | High confidence bot traffic |
+
+## CLI Reference
 
 ```
-microguard scan <logfile> [options]
-microguard probe <url> [options]
+microguard scan <logfile> [OPTIONS]
+microguard probe <url> [OPTIONS]
 microguard info
 ```
 
-#### Scan Command
+### Scan Options
 
-```bash
-microguard scan <logfile> [OPTIONS]
-
-Options:
-  -f, --format {auto,nginx,json}  Log file format (default: auto-detect)
-  -t, --threshold FLOAT           Bot score threshold (default: 0.7)
-  -m, --model PATH                Path to pre-trained model file
-  -o, --output {terminal,json,html}  Output format (default: terminal)
-  -O, --output-file PATH          Write report to file instead of stdout
-  --timeout INT                   Session timeout in minutes (default: 30)
+```
+  -f, --format {auto,nginx,json}    Log file format (default: auto-detect)
+  -t, --threshold FLOAT             Bot score threshold (default: 0.7)
+  -m, --model PATH                  Path to pre-trained model file
+  -o, --output {terminal,json,html} Output format (default: terminal)
+  -O, --output-file PATH            Write report to file instead of stdout
+  --timeout INT                     Session timeout in minutes (default: 30)
+  -v, --verbose                     Show feature vectors and heuristic rules
+  -j, --json-pretty                 Colored JSON for terminal reading
+  -w, --watch                       Continuously monitor log file
 ```
 
-#### Probe Command
+### Probe Options
 
-```bash
-microguard probe <url> [OPTIONS]
-
-Options:
-  -n, --count INT                 Number of probes to send (default: 3)
-  -d, --delay FLOAT               Delay between probes in seconds (default: 0.5)
+```
+  -n, --count INT                   Number of probes to send (default: 3)
+  -d, --delay FLOAT                 Delay between probes in seconds (default: 0.5)
   --method {GET,POST,HEAD,OPTIONS}  HTTP method (default: GET)
-  -t, --threshold FLOAT           Bot score threshold (default: 0.7)
-  -m, --model PATH                Path to pre-trained model file
-  -o, --output {terminal,json,html}  Output format (default: terminal)
-  -O, --output-file PATH          Write report to file instead of stdout
-  --timeout FLOAT                 Request timeout in seconds (default: 10)
-  --no-verify-ssl                 Disable SSL certificate verification
-  --user-agent TEXT               Custom User-Agent header
+  -t, --threshold FLOAT             Bot score threshold (default: 0.7)
+  -m, --model PATH                  Path to pre-trained model file
+  -o, --output {terminal,json,html} Output format (default: terminal)
+  -O, --output-file PATH            Write report to file instead of stdout
+  --timeout FLOAT                   Request timeout in seconds (default: 10)
+  --no-verify-ssl                   Disable SSL certificate verification
+  --user-agent TEXT                 Custom User-Agent header
+  -v, --verbose                     Show feature vectors and heuristic rules
+  -j, --json-pretty                 Colored JSON for terminal reading
 ```
 
 ### Python API
@@ -140,8 +177,8 @@ from microguard import scan_logfile, probe_and_analyze, BotDetector
 # Scan a log file
 results = scan_logfile(
     filepath="access.log",
-    fmt="auto",          # auto-detect format
-    threshold=0.7,       # bot score threshold
+    fmt="auto",
+    threshold=0.7,
     model_path="data/model.json",
 )
 print(f"Bot rate: {results['bot_rate']:.1%}")
@@ -149,8 +186,8 @@ print(f"Bot rate: {results['bot_rate']:.1%}")
 # Probe a live URL
 results = probe_and_analyze(
     url="https://example.com",
-    count=3,             # number of probes
-    delay=0.5,           # delay between probes
+    count=3,
+    delay=0.5,
     threshold=0.7,
     verbose=True,
 )
@@ -168,147 +205,80 @@ score = model.predict(features)  # 0.0 to 1.0
 ┌─────────────────────────────────────────────────────────────────┐
 │                        MICROGUARD CLI                           │
 ├─────────────────────────────────────────────────────────────────┤
-│                                                                 │
-│   ┌──────────────┐      ┌──────────────┐      ┌──────────────┐ │
-│   │  scan        │      │  probe       │      │  info        │ │
-│   │  (log files) │      │  (live URLs) │      │  (version)   │ │
-│   └──────┬───────┘      └──────┬───────┘      └──────────────┘ │
-│          │                     │                                │
-│          ▼                     ▼                                │
-│   ┌──────────────┐      ┌──────────────┐                       │
-│   │  parser.py   │      │  scanner.py  │                       │
-│   │  • Nginx     │      │  • HTTP/1.1  │                       │
-│   │  • JSON      │      │  • Timing    │                       │
-│   │  • Auto-detect│     │  • Headers   │                       │
-│   └──────┬───────┘      └──────┬───────┘                       │
-│          │                     │                                │
-│          ▼                     ▼                                │
-│   ┌─────────────────────────────────────┐                      │
-│   │           features.py               │                      │
-│   │  19 Feature Extractors:             │                      │
-│   │  • Timing: 4 features               │                      │
-│   │  • Behavioral: 5 features           │                      │
-│   │  • Header: 4 features               │                      │
-│   │  • Payload: 3 features              │                      │
-│   │  • Context: 3 features              │                      │
-│   └─────────────────┬───────────────────┘                      │
-│                     │                                          │
-│          ┌──────────┴──────────┐                               │
-│          ▼                     ▼                               │
-│   ┌──────────────┐      ┌──────────────┐                       │
-│   │  labeler.py  │      │  model.py    │                       │
-│   │  Heuristic   │      │  micrograd   │                       │
-│   │  Rules       │      │  MLP(19→     │                       │
-│   │  (17 rules)  │      │   4→1)       │                       │
-│   └──────┬───────┘      └──────┬───────┘                       │
-│          │                     │                                │
-│          └──────────┬──────────┘                               │
-│                     ▼                                          │
-│            ┌────────────────┐                                  │
-│            │  Score Fusion  │                                  │
-│            │  60% model +   │                                  │
-│            │  40% heuristic │                                  │
-│            └────────┬───────┘                                  │
-│                     │                                          │
-│          ┌──────────┴──────────┐                               │
-│          ▼                     ▼                               │
-│   ┌──────────────┐      ┌──────────────┐                       │
-│   │  report.py   │      │  report.py   │                       │
-│   │  • Terminal   │      │  • HTML      │                       │
-│   │  • JSON       │      │  • Print     │                       │
-│   └──────────────┘      └──────────────┘                       │
-│                                                                 │
+│   ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐      │
+│   │  scan    │  │  probe   │  │  watch   │  │  info    │      │
+│   └────┬─────┘  └────┬─────┘  └────┬─────┘  └──────────┘      │
+│        │              │             │                            │
+│        ▼              ▼             ▼                            │
+│   ┌──────────┐  ┌──────────┐  ┌──────────┐                     │
+│   │ parser   │  │ scanner  │  │ watch.py │                     │
+│   │ • Nginx  │  │ • HTTP   │  │ • tail   │                     │
+│   │ • JSON   │  │ • Timing │  │ • detect │                     │
+│   └────┬─────┘  └────┬─────┘  └────┬─────┘                     │
+│        └──────────────┴─────────────┘                            │
+│                       ▼                                          │
+│              ┌─────────────────┐                                 │
+│              │  features.py    │                                 │
+│              │  19 extractors  │                                 │
+│              └────────┬────────┘                                 │
+│           ┌───────────┴───────────┐                              │
+│           ▼                       ▼                              │
+│   ┌──────────────┐       ┌──────────────┐                       │
+│   │  labeler.py  │       │  model.py    │                       │
+│   │  24 rules    │       │  MLP(19→4→1) │                       │
+│   └──────┬───────┘       └──────┬───────┘                       │
+│           └──────────┬──────────┘                                │
+│                      ▼                                           │
+│            ┌─────────────────┐                                   │
+│            │  Score Fusion   │                                   │
+│            │  60% model +    │                                   │
+│            │  40% heuristic  │                                   │
+│            └────────┬────────┘                                   │
+│                     ▼                                            │
+│   ┌──────────────────────────────────────────────┐               │
+│   │  report.py                                   │               │
+│   │  • Terminal (ANSI colors, score bars)        │               │
+│   │  • JSON (machine-readable)                   │               │
+│   │  • JSON Pretty (colored for terminal)        │               │
+│   │  • HTML (dark theme, responsive)             │               │
+│   │  • Verbose (feature vectors + rules)         │               │
+│   └──────────────────────────────────────────────┘               │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-### Data Flow
+## Heuristic Rules (24 patterns)
 
-```
-LOG FILE / LIVE URL
-       │
-       ▼
-┌─────────────────────────────────────────────────────────────┐
-│                      PARSING LAYER                          │
-│  Nginx combined / JSON structured / HTTP response           │
-└─────────────────────────────────────────────────────────────┘
-       │
-       ▼
-┌─────────────────────────────────────────────────────────────┐
-│                    FEATURE EXTRACTION                       │
-│  Timing (4) + Behavioral (5) + Header (4) + Payload (3)    │
-│  + Context (3) = 19-dimensional vector                     │
-└─────────────────────────────────────────────────────────────┘
-       │
-       ▼
-┌─────────────────────────────────────────────────────────────┐
-│                     ANALYSIS LAYER                          │
-│  ┌─────────────────┐      ┌─────────────────┐              │
-│  │ Heuristic Rules │      │  micrograd MLP  │              │
-│  │ (17 patterns)   │      │  465 parameters  │              │
-│  │ confidence: 0-1 │      │  score: 0-1     │              │
-│  └────────┬────────┘      └────────┬────────┘              │
-│           │                        │                        │
-│           └──────────┬─────────────┘                        │
-│                      ▼                                      │
-│            ┌─────────────────┐                              │
-│            │ Score Fusion    │                              │
-│            │ 0.6×model +     │                              │
-│            │ 0.4×heuristic   │                              │
-│            └────────┬────────┘                              │
-└─────────────────────┼───────────────────────────────────────┘
-                      │
-                      ▼
-┌─────────────────────────────────────────────────────────────┐
-│                      OUTPUT LAYER                           │
-│  Terminal (ANSI) / JSON / HTML (dark theme, printable)      │
-└─────────────────────────────────────────────────────────────┘
-```
-
-## Features Reference
-
-### 19 HTTP-Level Features
-
-| # | Feature | Description | Source |
-|---|---------|-------------|--------|
-| 1 | `time_since_last_request` | Seconds since previous request | Timing |
-| 2 | `requests_per_minute_1m` | Request rate in last minute | Timing |
-| 3 | `requests_per_minute_5m` | Request rate in last 5 minutes | Timing |
-| 4 | `inter_request_time_cv` | Coefficient of variation of timing | Timing |
-| 5 | `time_since_session_start` | Session duration | Timing |
-| 6 | `endpoint_count` | Number of unique endpoints hit | Behavioral |
-| 7 | `endpoint_sequence_entropy` | Shannon entropy of URL sequence | Behavioral |
-| 8 | `unique_endpoint_ratio` | Unique endpoints / total requests | Behavioral |
-| 9 | `method_mismatch_count` | HTTP method inconsistencies | Behavioral |
-| 10 | `header_consistency_score` | Header presence ratio | Header |
-| 11 | `has_accept_language` | Accept-Language header present | Header |
-| 12 | `ua_category` | User-Agent classification (0=browser, 1=bot) | Header |
-| 13 | `payload_entropy` | Shannon entropy of request body | Payload |
-| 14 | `field_fill_speed` | Form field completion speed | Payload |
-| 15 | `same_endpoint_hits` | Repeated hits to same endpoint | Context |
-| 16 | `error_rate` | Percentage of 4xx/5xx responses | Context |
-| 17 | `image_ratio` | Percentage of image requests | Context |
-| 18 | `night_ratio` | Percentage of requests 2am-6am | Context |
-| 19 | `max_sustained_click_rate` | Peak requests per second | Context |
-
-### Heuristic Rules (17 patterns)
-
-**High Confidence (0.90-0.99):**
+### High Confidence (0.90-0.99)
 - Known bot/monitoring user agents (80+ patterns)
 - Vulnerability scanner URL patterns (`/wp-admin`, `/phpmyadmin`, etc.)
 - Uniform timing patterns (all requests within 1ms)
 - HTTP/1.0-only clients
+- Cloudflare WAF bypass detection
+- Attack tool signatures (Nuclei, ffuf, Masscan, etc.)
+- Botnet scanning patterns (Mirai, IoT endpoints)
 
-**Medium Confidence (0.70-0.89):**
+### Medium Confidence (0.70-0.89)
 - High request rates (>100 requests, >50 req/min)
 - Same-endpoint scraping (>10 requests to same URL)
 - No referrer on all requests (>20 requests)
 - High error rate (>50% failed requests)
 - Repeated API endpoint abuse
+- API key parameter scanning (`?key=`, `?token=`, `?api_key=`)
+- Credential brute-force (rapid auth endpoint hits)
+- Directory brute-force (70%+ 403/404 responses)
+- UA rotation (distributed attacks)
 
-**Low Confidence (0.55-0.69):**
+### Low Confidence (0.55-0.69)
 - Unknown user agents
 - Short fast sessions (<5s, >20 requests)
 - Night-time activity patterns
+
+### Human Signals (0.55-0.75)
+- Known browser user agents with normal behavior
+- Variable timing patterns (high CV)
+- Multiple different endpoints explored
+- Natural referrer chains
+- Behind Cloudflare with normal browser
 
 ## Model Architecture
 
@@ -324,7 +294,7 @@ Input (19 features)
        ▼
 ┌─────────────┐
 │   Linear    │  4 → 1 (5 params)
-│    + Sigmoid│
+│    + Logit  │
 └──────┬──────┘
        │
        ▼
@@ -335,108 +305,48 @@ Model size: ~1.8KB
 Inference time: < 0.5ms per request
 ```
 
-### Training
-
-```bash
-# Generate training data
-python -m microguard.training.generate
-
-# Train model
-python -m microguard.training.train
-
-# Model saved to data/model.json
-# Normalization params saved to data/normalization.json
-```
-
-**Training data:** 5,040 samples (2,040 synthetic + 3,000 real-world inspired)
-**Training accuracy:** 99.7% on synthetic data
-**Model weights:** JSON format, compatible with micrograd
-
-## Output Formats
-
-### Terminal (default)
-
-```bash
-microguard scan access.log
-```
-
-ANSI-colored terminal output with status icons, score badges, and tables.
-
-### JSON
-
-```bash
-microguard scan access.log --output json
-```
-
-Structured JSON for programmatic consumption:
-
-```json
-{
-  "total_sessions": 128,
-  "bot_count": 58,
-  "human_count": 70,
-  "bot_rate": 0.45,
-  "sessions": [
-    {
-      "ip": "10.0.0.50",
-      "score": 0.95,
-      "label": "bot",
-      "request_count": 1,
-      "duration": 0.0,
-      "top_endpoint": "/api/products",
-      "features": {...}
-    }
-  ]
-}
-```
-
-### HTML
-
-```bash
-microguard scan access.log --output html --output-file report.html
-```
-
-Dark-themed, responsive HTML report with:
-- Donut chart showing bot/human ratio
-- Color-coded stat cards
-- Sortable session table
-- Print-friendly styles
-
 ## File Structure
 
 ```
 microguard/
-├── setup.py                 # Package installation
-├── README.md                # This file
+├── setup.py                    # Package installation
+├── README.md                   # This file
+├── LICENSE                     # MIT License
+├── .github/workflows/test.yml  # CI: tests on push/PR
 ├── microguard/
-│   ├── __init__.py          # Package exports
-│   ├── cli.py               # CLI entry point
-│   ├── parser.py            # Log file parsers
-│   ├── features.py          # 19 feature extractors
-│   ├── labeler.py           # Heuristic bot/human labels
-│   ├── model.py             # micrograd MLP wrapper
-│   ├── scanner.py           # HTTP scanner for live probing
-│   ├── report.py            # Terminal + JSON + HTML output
+│   ├── __init__.py             # Package exports
+│   ├── cli.py                  # CLI entry point (scan, probe, watch, info)
+│   ├── parser.py               # Nginx + JSON log parsers
+│   ├── features.py             # 19 feature extractors
+│   ├── labeler.py              # 24 heuristic bot/human rules
+│   ├── model.py                # micrograd MLP wrapper (85 params)
+│   ├── scanner.py              # HTTP scanner for live probing
+│   ├── watch.py                # Continuous log monitoring
+│   ├── report.py               # Terminal + JSON + HTML + Verbose output
 │   └── training/
-│       ├── train.py         # Model training script
-│       └── generate.py      # Synthetic data generation
-├── tests/
-│   ├── test_parser.py
-│   ├── test_features.py
-│   ├── test_labeler.py
-│   ├── test_model.py
-│   └── test_scanner.py
+│       ├── train.py            # Model training script
+│       └── generate.py         # Synthetic data generation
+├── tests/                      # 142 tests
+│   ├── test_parser.py          # 16 tests
+│   ├── test_features.py        # 21 tests
+│   ├── test_labeler.py         # 7 tests
+│   ├── test_labeler_rules.py   # 18 tests (Cloudflare, API key, botnet)
+│   ├── test_model.py           # 7 tests
+│   ├── test_scanner.py         # 16 tests
+│   ├── test_scanner_extended.py # 16 tests
+│   ├── test_report.py          # 27 tests
+│   └── test_watch.py           # 8 tests
 └── data/
-    ├── model.json           # Pre-trained model weights
-    ├── normalization.json   # Feature normalization params
-    ├── training_data.json   # Training dataset
-    └── sample_access.log    # Example log file
+    ├── model.json              # Pre-trained model weights (1.8KB)
+    ├── normalization.json      # Feature normalization params
+    ├── training_data.json      # Training dataset
+    └── sample_access.log       # Example log file (auto-scanned on first run)
 ```
 
 ## Testing
 
 ```bash
-# Run all tests
+# Run all tests (142 tests)
 python -m pytest tests/
 
 # Run with verbose output
@@ -445,19 +355,28 @@ python -m pytest tests/ -v
 # Run specific test file
 python -m pytest tests/test_features.py
 
-# Skip network-dependent tests
-python -m pytest tests/ -m "not network"
+# Run only new tests
+python -m pytest tests/test_labeler_rules.py tests/test_report.py tests/test_watch.py
 ```
 
-**Test coverage:** 69 tests (all passing)
+**Test coverage:** 142 tests (all passing)
+
+## CI/CD
+
+GitHub Actions workflow runs on every push and PR:
+
+- **Matrix:** 3 OS (ubuntu, macOS, Windows) × 6 Python versions (3.8–3.13)
+- **Steps:** Install → pytest → CLI smoke test
+- **Config:** `.github/workflows/test.yml`
 
 ## Contributing
 
 1. Fork the repository
 2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
+3. Run tests (`python -m pytest tests/`)
+4. Commit your changes (`git commit -m 'Add amazing feature'`)
+5. Push to the branch (`git push origin feature/amazing-feature`)
+6. Open a Pull Request
 
 ## License
 

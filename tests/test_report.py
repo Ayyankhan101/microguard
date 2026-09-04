@@ -1,0 +1,347 @@
+"""Tests for the report module."""
+
+import pytest
+from microguard.report import (
+    score_label, score_label_color, _score_bar, _colorize,
+    format_terminal, format_json, format_json_pretty, format_verbose,
+    format_html, print_report,
+)
+
+
+class TestScoreLabel:
+    """Tests for score_label function."""
+
+    def test_safe_range(self):
+        assert score_label(0.0) == 'SAFE'
+        assert score_label(0.15) == 'SAFE'
+        assert score_label(0.30) == 'SAFE'
+
+    def test_low_range(self):
+        assert score_label(0.31) == 'LOW'
+        assert score_label(0.45) == 'LOW'
+        assert score_label(0.59) == 'LOW'
+
+    def test_warning_range(self):
+        assert score_label(0.60) == 'WARNING'
+        assert score_label(0.70) == 'WARNING'
+        assert score_label(0.79) == 'WARNING'
+
+    def test_danger_range(self):
+        assert score_label(0.80) == 'DANGER'
+        assert score_label(0.95) == 'DANGER'
+        assert score_label(1.0) == 'DANGER'
+
+
+class TestScoreLabelColor:
+    """Tests for score_label_color function."""
+
+    def test_safe_green(self):
+        assert score_label_color(0.0) == 'green'
+        assert score_label_color(0.30) == 'green'
+
+    def test_low_blue(self):
+        assert score_label_color(0.31) == 'blue'
+        assert score_label_color(0.59) == 'blue'
+
+    def test_warning_yellow(self):
+        assert score_label_color(0.60) == 'yellow'
+        assert score_label_color(0.79) == 'yellow'
+
+    def test_danger_red(self):
+        assert score_label_color(0.80) == 'red'
+        assert score_label_color(1.0) == 'red'
+
+
+class TestScoreBar:
+    """Tests for _score_bar function."""
+
+    def test_empty_bar(self):
+        bar = _score_bar(0.0, 10)
+        assert '░' * 10 in bar
+
+    def test_full_bar(self):
+        bar = _score_bar(1.0, 10)
+        # Each block is wrapped in ANSI codes, count raw blocks
+        assert bar.count('█') == 10
+        assert bar.count('░') == 0
+
+    def test_half_bar(self):
+        bar = _score_bar(0.5, 10)
+        assert bar.count('█') == 5
+        assert bar.count('░') == 5
+
+    def test_custom_width(self):
+        bar = _score_bar(0.5, 5)
+        assert bar.count('█') >= 2 and bar.count('█') <= 3
+
+
+class TestColorize:
+    """Tests for _colorize function."""
+
+    def test_adds_ansi_codes(self):
+        result = _colorize("test", "red")
+        assert '\033[91m' in result
+        assert '\033[0m' in result
+        assert 'test' in result
+
+    def test_unknown_color(self):
+        result = _colorize("test", "unknown")
+        # Unknown color still gets reset code appended
+        assert 'test' in result
+
+
+class TestFormatTerminal:
+    """Tests for format_terminal function."""
+
+    def _make_results(self, bot_rate=0.5, sessions=None):
+        if sessions is None:
+            sessions = [
+                {
+                    'ip': '10.0.0.1', 'score': 0.95, 'label': 'bot',
+                    'heuristic_label': 'bot', 'heuristic_confidence': 0.95,
+                    'heuristic_reason': 'known bot UA', 'model_score': 0.8,
+                    'request_count': 10, 'duration': 5.0,
+                    'top_endpoint': '/api', 'user_agent': 'python-requests',
+                },
+                {
+                    'ip': '192.168.1.1', 'score': 0.2, 'label': 'human',
+                    'heuristic_label': 'human', 'heuristic_confidence': 0.75,
+                    'heuristic_reason': 'known browser', 'model_score': 0.1,
+                    'request_count': 5, 'duration': 30.0,
+                    'top_endpoint': '/', 'user_agent': 'Mozilla/5.0',
+                },
+            ]
+        return {
+            'total_sessions': 2,
+            'bot_count': 1,
+            'human_count': 1,
+            'bot_rate': bot_rate,
+            'sessions': sessions,
+        }
+
+    def test_header_present(self):
+        result = self._make_results()
+        output = format_terminal(result)
+        assert 'Microguard Bot Traffic Report' in output
+
+    def test_bot_rate_shown(self):
+        result = self._make_results(bot_rate=0.5)
+        output = format_terminal(result)
+        assert '50.0%' in output
+
+    def test_session_table(self):
+        result = self._make_results()
+        output = format_terminal(result)
+        assert '10.0.0.1' in output
+        assert '192.168.1.1' in output
+
+    def test_risk_labels(self):
+        result = self._make_results()
+        output = format_terminal(result)
+        assert 'DANGER' in output
+        assert 'LOW' in output or 'SAFE' in output
+
+    def test_score_bar_present(self):
+        result = self._make_results()
+        output = format_terminal(result)
+        assert '█' in output or '░' in output
+
+    def test_empty_sessions(self):
+        result = self._make_results(sessions=[])
+        output = format_terminal(result)
+        assert 'Total sessions:  0' in output or 'Total sessions:  2' in output
+
+    def test_recommendations_high(self):
+        result = self._make_results(bot_rate=0.5)
+        output = format_terminal(result)
+        assert 'Rate limiting' in output or 'CAPTCHA' in output
+
+    def test_recommendations_low(self):
+        result = self._make_results(bot_rate=0.05)
+        output = format_terminal(result)
+        assert 'Healthy' in output or 'healthy' in output
+
+
+class TestFormatJson:
+    """Tests for format_json function."""
+
+    def test_valid_json(self):
+        import json
+        result = {
+            'total_sessions': 1, 'bot_count': 1, 'human_count': 0,
+            'bot_rate': 1.0, 'sessions': [], 'summary': {},
+        }
+        output = format_json(result)
+        parsed = json.loads(output)
+        assert parsed['total_sessions'] == 1
+
+    def test_pretty_format(self):
+        result = {
+            'total_sessions': 0, 'bot_count': 0, 'human_count': 0,
+            'bot_rate': 0.0, 'sessions': [],
+        }
+        output = format_json(result)
+        assert '\n' in output  # Should be multi-line
+        assert '  ' in output  # Should be indented
+
+
+class TestFormatJsonPretty:
+    """Tests for format_json_pretty function."""
+
+    def test_scan_format(self):
+        result = {
+            'total_sessions': 2, 'bot_count': 1, 'human_count': 1,
+            'bot_rate': 0.5, 'threshold': 0.7, 'model_used': True,
+            'sessions': [
+                {
+                    'ip': '10.0.0.1', 'score': 0.95, 'label': 'bot',
+                    'heuristic_label': 'bot', 'heuristic_confidence': 0.95,
+                    'heuristic_reason': 'known bot UA', 'model_score': 0.8,
+                    'request_count': 10, 'duration': 5.0,
+                    'top_endpoint': '/api', 'user_agent': 'python-requests',
+                },
+            ],
+        }
+        output = format_json_pretty(result)
+        assert 'summary' in output
+        assert 'DANGER' in output or 'danner' in output.lower()
+
+    def test_probe_format(self):
+        result = {
+            'url': 'https://example.com',
+            'status_code': 200,
+            'probes': 3,
+            'combined_score': 0.23,
+            'label': 'human',
+            'threshold': 0.7,
+            'heuristic_score': 0.3,
+            'heuristic_reason': 'no strong signals',
+            'model_score': 0.1,
+            'features': {'response_time': 0.5, 'ttfb': 0.3},
+            'timing': {'total': 0.5},
+        }
+        output = format_json_pretty(result)
+        assert 'example.com' in output
+        assert 'features' in output
+        assert 'response_time' in output
+
+
+class TestFormatVerbose:
+    """Tests for format_verbose function."""
+
+    def test_shows_feature_vector(self):
+        result = {
+            'total_sessions': 1, 'bot_count': 1, 'human_count': 0,
+            'bot_rate': 1.0, 'sessions': [
+                {
+                    'ip': '10.0.0.1', 'score': 0.95, 'label': 'bot',
+                    'heuristic_label': 'bot', 'heuristic_confidence': 0.95,
+                    'heuristic_reason': 'known bot UA', 'model_score': 0.8,
+                    'request_count': 10, 'duration': 5.0,
+                    'top_endpoint': '/api', 'user_agent': 'python-requests',
+                    'features': {
+                        'time_since_last_request': 0.5,
+                        'requests_per_minute_1m': 10.0,
+                        'requests_per_minute_5m': 10.0,
+                        'inter_request_time_cv': 0.05,
+                        'time_since_session_start': 5.0,
+                        'endpoint_count': 1.0,
+                        'endpoint_sequence_entropy': 0.0,
+                        'unique_endpoint_ratio': 0.1,
+                        'method_mismatch_count': 0.0,
+                        'header_consistency_score': 1.0,
+                        'has_accept_language': 0.0,
+                        'ua_category': 1.0,
+                        'payload_entropy': 3.0,
+                        'field_fill_speed': 0.0,
+                        'same_endpoint_hits': 10.0,
+                        'error_rate': 0.0,
+                        'image_ratio': 0.0,
+                        'night_ratio': 0.0,
+                        'max_sustained_click_rate': 0.0,
+                    },
+                },
+            ],
+        }
+        output = format_verbose(result)
+        assert 'Feature Vector' in output
+        assert 'time_since_last_request' in output
+        assert 'heuristic' in output.lower()
+
+    def test_shows_session_details(self):
+        result = {
+            'total_sessions': 1, 'bot_count': 1, 'human_count': 0,
+            'bot_rate': 1.0, 'sessions': [
+                {
+                    'ip': '10.0.0.1', 'score': 0.95, 'label': 'bot',
+                    'heuristic_label': 'bot', 'heuristic_confidence': 0.95,
+                    'heuristic_reason': 'known bot UA', 'model_score': 0.8,
+                    'request_count': 10, 'duration': 5.0,
+                    'top_endpoint': '/api', 'user_agent': 'python-requests',
+                    'features': {f: 0.0 for f in [
+                        'time_since_last_request', 'requests_per_minute_1m',
+                        'requests_per_minute_5m', 'inter_request_time_cv',
+                        'time_since_session_start', 'endpoint_count',
+                        'endpoint_sequence_entropy', 'unique_endpoint_ratio',
+                        'method_mismatch_count', 'header_consistency_score',
+                        'has_accept_language', 'ua_category', 'payload_entropy',
+                        'field_fill_speed', 'same_endpoint_hits', 'error_rate',
+                        'image_ratio', 'night_ratio', 'max_sustained_click_rate',
+                    ]},
+                },
+            ],
+        }
+        output = format_verbose(result)
+        assert '10.0.0.1' in output
+        assert 'python-requests' in output
+        assert 'known bot UA' in output
+
+
+class TestFormatHtml:
+    """Tests for format_html function."""
+
+    def test_valid_html(self):
+        result = {
+            'total_sessions': 2, 'bot_count': 1, 'human_count': 1,
+            'bot_rate': 0.5, 'threshold': 0.7, 'model_used': True,
+            'summary': {'total_entries': 100},
+            'sessions': [
+                {
+                    'ip': '10.0.0.1', 'score': 0.95, 'label': 'bot',
+                    'user_agent': 'python-requests', 'request_count': 10,
+                    'duration': 5.0, 'top_endpoint': '/api',
+                    'heuristic_reason': 'known bot',
+                },
+            ],
+        }
+        output = format_html(result)
+        assert '<!DOCTYPE html>' in output
+        assert 'Microguard' in output
+        assert '50.0%' in output
+
+    def test_empty_sessions(self):
+        result = {
+            'total_sessions': 0, 'bot_count': 0, 'human_count': 0,
+            'bot_rate': 0.0, 'threshold': 0.7, 'model_used': False,
+            'summary': {'total_entries': 0}, 'sessions': [],
+        }
+        output = format_html(result)
+        assert '<!DOCTYPE html>' in output
+
+
+class TestPrintReport:
+    """Tests for print_report function."""
+
+    def test_json_format(self, capsys):
+        result = {'total_sessions': 0, 'bot_count': 0, 'human_count': 0,
+                  'bot_rate': 0.0, 'sessions': []}
+        print_report(result, fmt='json')
+        captured = capsys.readouterr()
+        assert 'total_sessions' in captured.out
+
+    def test_terminal_format(self, capsys):
+        result = {'total_sessions': 0, 'bot_count': 0, 'human_count': 0,
+                  'bot_rate': 0.0, 'sessions': []}
+        print_report(result, fmt='terminal')
+        captured = capsys.readouterr()
+        assert 'Microguard' in captured.out

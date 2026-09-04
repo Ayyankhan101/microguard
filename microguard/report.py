@@ -22,6 +22,49 @@ def _colorize(text: str, color: str) -> str:
     return f"{colors.get(color, '')}{text}{colors['reset']}"
 
 
+def score_label(score: float) -> str:
+    """Return a human-readable risk label for a bot score.
+    
+    0.00-0.30 = SAFE
+    0.31-0.59 = LOW
+    0.60-0.79 = WARNING  
+    0.80-1.00 = DANGER
+    """
+    if score <= 0.30:
+        return 'SAFE'
+    elif score <= 0.59:
+        return 'LOW'
+    elif score <= 0.79:
+        return 'WARNING'
+    else:
+        return 'DANGER'
+
+
+def score_label_color(score: float) -> str:
+    """Return ANSI color name for a score label."""
+    if score <= 0.30:
+        return 'green'
+    elif score <= 0.59:
+        return 'blue'
+    elif score <= 0.79:
+        return 'yellow'
+    else:
+        return 'red'
+
+
+def _score_bar(score: float, width: int = 10) -> str:
+    """Create a colored ASCII score bar."""
+    filled = int(score * width)
+    empty = width - filled
+    if score > 0.7:
+        bar_char = _colorize('█', 'red')
+    elif score > 0.3:
+        bar_char = _colorize('█', 'yellow')
+    else:
+        bar_char = _colorize('█', 'green')
+    return bar_char * filled + '░' * empty
+
+
 def format_terminal(results: Dict[str, Any]) -> str:
     """Format results as a terminal-friendly table.
     
@@ -52,18 +95,25 @@ def format_terminal(results: Dict[str, Any]) -> str:
     if bot_rate < 0.1:
         status_color = 'green'
         status_icon = '✅'
+        status_label = 'HEALTHY'
     elif bot_rate < 0.3:
         status_color = 'yellow'
         status_icon = '⚠️ '
+        status_label = 'WARNING'
     else:
         status_color = 'red'
         status_icon = '🚨'
+        status_label = 'CRITICAL'
     
-    lines.append(f"  {status_icon} {_colorize(f'Bot Traffic: {bot_rate:.1%}', status_color)}")
+    lines.append(f"  {status_icon} Bot Traffic: {_colorize(f'{bot_rate:.1%}', status_color)}  {_colorize(status_label, status_color)}")
     lines.append("")
     lines.append(f"  Total sessions:  {total}")
     lines.append(f"  Human sessions:  {_colorize(str(humans), 'green')}")
     lines.append(f"  Bot sessions:    {_colorize(str(bots), 'red')}")
+    lines.append("")
+    
+    # Visual bot rate bar
+    lines.append(f"  {_score_bar(bot_rate)}  {bot_rate:.1%}")
     lines.append("")
     
     # Top suspicious sessions
@@ -80,18 +130,18 @@ def format_terminal(results: Dict[str, Any]) -> str:
             
             # Table header
             lines.append(
-                f"  {'IP':<20} {'Score':>6} {'Label':<8} {'Reqs':>5} "
-                f"{'Duration':>8} {'Top Endpoint'}"
+                f"  {'IP':<18} {'Score':>5} {'Bar':<12} {'Risk':<9} {'Label':<7} {'Reqs':>5} "
+                f"{'Dur':>6} {'Heuristic Rule'}"
             )
-            lines.append("  " + "─" * 70)
+            lines.append("  " + "─" * 85)
             
             for s in top_n:
-                ip = s.get('ip', '?')[:20]
+                ip = s.get('ip', '?')[:18]
                 score = s.get('score', 0)
                 label = s.get('label', '?')
                 reqs = s.get('request_count', 0)
                 duration = s.get('duration', 0)
-                top_url = s.get('top_endpoint', '?')[:30]
+                h_reason = s.get('heuristic_reason', '')[:35]
                 
                 # Color score
                 if score > 0.7:
@@ -104,9 +154,25 @@ def format_terminal(results: Dict[str, Any]) -> str:
                 # Color label
                 label_str = _colorize(label, 'red' if label == 'bot' else 'green')
                 
+                # Risk label
+                risk = score_label(score)
+                risk_color = score_label_color(score)
+                risk_str = _colorize(f"{risk:<9}", risk_color)
+                
+                # Score bar
+                bar = _score_bar(score, 10)
+                
+                # Duration color (fast = suspicious, normal = fine)
+                if duration < 1.0 and reqs > 5:
+                    dur_str = _colorize(f"{duration:.1f}s", 'red')
+                elif duration > 300:
+                    dur_str = _colorize(f"{duration:.0f}s", 'cyan')
+                else:
+                    dur_str = f"{duration:.1f}s"
+                
                 lines.append(
-                    f"  {ip:<20} {score_str:>6} {label_str:<8} {reqs:>5} "
-                    f"{duration:>7.1f}s {top_url}"
+                    f"  {ip:<18} {score_str:>5} {bar} {risk_str} {label_str:<7} {reqs:>5} "
+                    f"{dur_str:>6} {h_reason}"
                 )
             
             lines.append("")
@@ -116,16 +182,16 @@ def format_terminal(results: Dict[str, Any]) -> str:
     lines.append("  ─────────────────")
     
     if bot_rate > 0.3:
-        lines.append("  🚨 High bot traffic detected. Consider:")
+        lines.append(_colorize("  🚨 High bot traffic detected. Consider:", 'red'))
         lines.append("     • Implement rate limiting on suspicious IPs")
         lines.append("     • Add CAPTCHA for repeated login attempts")
         lines.append("     • Review and block known bot user agents")
     elif bot_rate > 0.1:
-        lines.append("  ⚠️  Moderate bot traffic detected. Consider:")
+        lines.append(_colorize("  ⚠️  Moderate bot traffic detected. Consider:", 'yellow'))
         lines.append("     • Monitor top suspicious sessions")
         lines.append("     • Consider rate limiting for high-frequency endpoints")
     else:
-        lines.append("  ✅ Low bot traffic. Your API looks healthy.")
+        lines.append(_colorize("  ✅ Low bot traffic. Your API looks healthy.", 'green'))
         lines.append("     • Continue monitoring periodically")
     
     lines.append("")
@@ -140,6 +206,143 @@ def format_json(results: Dict[str, Any]) -> str:
         results: Same dictionary as format_terminal
     """
     return json.dumps(results, indent=2, default=str)
+
+
+def format_json_pretty(results: Dict[str, Any]) -> str:
+    """Format results as human-friendly colored JSON for terminal reading.
+    
+    Adds ANSI colors to keys, scores, and labels so the JSON
+    is scannable without a separate viewer.
+    """
+    lines = []
+    
+    def _k(key: str) -> str:
+        return _colorize(f'"{key}"', 'cyan')
+    
+    def _s(val: str) -> str:
+        return _colorize(f'"{val}"', 'green')
+    
+    def _n(val) -> str:
+        return _colorize(str(val), 'yellow')
+    
+    def _score_color(val: float) -> str:
+        if val > 0.7:
+            return _colorize(f'{val}', 'red')
+        elif val > 0.3:
+            return _colorize(f'{val}', 'yellow')
+        else:
+            return _colorize(f'{val}', 'green')
+    
+    def _label_color(label: str) -> str:
+        return _colorize(f'"{label}"', 'red' if label == 'bot' else 'green')
+    
+    # Detect scan vs probe format
+    is_probe = 'combined_score' in results and 'sessions' not in results
+    
+    if is_probe:
+        return _format_json_pretty_probe(results, _k, _s, _n, _score_color, _label_color)
+    
+    # --- Scan format ---
+    total = results.get('total_sessions', 0)
+    bots = results.get('bot_count', 0)
+    humans = results.get('human_count', 0)
+    bot_rate = results.get('bot_rate', 0.0)
+    
+    lines.append('{')
+    lines.append(f'  {_k("summary")}: {{')
+    lines.append(f'    {_k("total_sessions")}: {_n(total)},')
+    lines.append(f'    {_k("bot_sessions")}: {_colorize(str(bots), "red")},')
+    lines.append(f'    {_k("human_sessions")}: {_colorize(str(humans), "green")},')
+    lines.append(f'    {_k("bot_rate")}: {_score_color(bot_rate)}')
+    lines.append('  },')
+    lines.append(f'  {_k("threshold")}: {_n(results.get("threshold", 0.7))},')
+    lines.append(f'  {_k("model_used")}: {_colorize(str(results.get("model_used", False)), "yellow")},')
+    lines.append('')
+    lines.append(f'  {_k("sessions")}: [')
+    
+    sessions = results.get('sessions', [])
+    sorted_sessions = sorted(sessions, key=lambda s: s.get('score', 0), reverse=True)
+    
+    for i, s in enumerate(sorted_sessions):
+        score = s.get('score', 0)
+        label = s.get('label', '?')
+        risk = score_label(score)
+        
+        comma = ',' if i < len(sorted_sessions) - 1 else ''
+        lines.append('  {')
+        lines.append(f'    {_k("ip")}: {_s(s.get("ip", "?"))},')
+        lines.append(f'    {_k("score")}: {_score_color(score)},')
+        lines.append(f'    {_k("risk")}: {_colorize(f"\"{risk}\"", score_label_color(score))},')
+        lines.append(f'    {_k("label")}: {_label_color(label)},')
+        lines.append(f'    {_k("heuristic")}: {{')
+        lines.append(f'      {_k("label")}: {_label_color(s.get("heuristic_label", "?"))},')
+        lines.append(f'      {_k("confidence")}: {_n(s.get("heuristic_confidence", 0))},')
+        lines.append(f'      {_k("reason")}: {_s(s.get("heuristic_reason", ""))}')
+        lines.append(f'    }},')
+        lines.append(f'    {_k("model_score")}: {_n(s.get("model_score", 0))},')
+        lines.append(f'    {_k("requests")}: {_n(s.get("request_count", 0))},')
+        dur = f"{s.get('duration', 0):.1f}"
+        lines.append(f'    {_k("duration")}: {_n(dur)},')
+        lines.append(f'    {_k("top_endpoint")}: {_s(s.get("top_endpoint", "?"))},')
+        lines.append(f'    {_k("user_agent")}: {_s(s.get("user_agent", "?")[:80])}')
+        lines.append(f'  }}{comma}')
+    
+    lines.append('  ]')
+    lines.append('}')
+    
+    return '\n'.join(lines)
+
+
+def _format_json_pretty_probe(results: Dict, _k, _s, _n, _score_color, _label_color) -> str:
+    """Format probe results as colored JSON."""
+    lines = []
+    score = results.get('combined_score', 0)
+    label = results.get('label', '?')
+    risk = score_label(score)
+    
+    lines.append('{')
+    lines.append(f'  {_k("url")}: {_s(results.get("url", "?"))},')
+    status_code = results.get('status_code', 0)
+    lines.append(f'  {_k("status")}: {_n(f"HTTP {status_code}")},')
+    lines.append(f'  {_k("probes")}: {_n(results.get("probes", 0))},')
+    lines.append(f'  {_k("score")}: {_score_color(score)},')
+    risk_json = f'"{risk}"'
+    lines.append(f'  {_k("risk")}: {_colorize(risk_json, score_label_color(score))},')
+    lines.append(f'  {_k("label")}: {_label_color(label)},')
+    lines.append(f'  {_k("threshold")}: {_n(results.get("threshold", 0.7))},')
+    lines.append('')
+    lines.append(f'  {_k("analysis")}: {{')
+    lines.append(f'    {_k("heuristic")}: {{')
+    lines.append(f'      {_k("score")}: {_n(results.get("heuristic_score", 0))},')
+    lines.append(f'      {_k("reason")}: {_s(results.get("heuristic_reason", ""))}')
+    lines.append(f'    }},')
+    ms = results.get('model_score', 0)
+    lines.append(f'    {_k("model")}: {_n(ms)}')
+    lines.append('  },')
+    lines.append('')
+    
+    # Features
+    features = results.get('features', {})
+    if features:
+        lines.append(f'  {_k("features")}: {{')
+        items = list(features.items())
+        for i, (fname, fval) in enumerate(items):
+            comma = ',' if i < len(items) - 1 else ''
+            lines.append(f'    {_k(fname)}: {_n(f"{fval:.4f}")}{comma}')
+        lines.append('  },')
+    
+    # Timing
+    timing = results.get('timing', {})
+    if timing:
+        lines.append(f'  {_k("timing")}: {{')
+        items = list(timing.items())
+        for i, (tname, tval) in enumerate(items):
+            comma = ',' if i < len(items) - 1 else ''
+            lines.append(f'    {_k(tname)}: {_n(f"{tval:.4f}")}{comma}')
+        lines.append('  }')
+    
+    lines.append('}')
+    return '\n'.join(lines)
 
 
 def format_html(results: Dict[str, Any]) -> str:
@@ -185,10 +388,13 @@ def format_html(results: Dict[str, Any]) -> str:
         
         if score > 0.7:
             score_class = 'score-high'
+            risk = score_label(score)
         elif score > 0.3:
             score_class = 'score-medium'
+            risk = score_label(score)
         else:
             score_class = 'score-low'
+            risk = score_label(score)
         
         label_class = 'label-bot' if label == 'bot' else 'label-human'
         
@@ -209,6 +415,7 @@ def format_html(results: Dict[str, Any]) -> str:
         <tr>
             <td class="mono">{ip}</td>
             <td><span class="score-badge {score_class}">{score:.2f}</span></td>
+            <td><span class="risk-badge risk-{risk.lower()}">{risk}</span></td>
             <td><span class="label-badge {label_class}">{label}</span></td>
             <td>{s.get('request_count', 0)}</td>
             <td>{s.get('duration', 0):.1f}s</td>
@@ -421,6 +628,19 @@ def format_html(results: Dict[str, Any]) -> str:
         }}
         .label-bot {{ background: rgba(239, 68, 68, 0.15); color: var(--red); }}
         .label-human {{ background: rgba(16, 185, 129, 0.15); color: var(--green); }}
+        .risk-badge {{
+            display: inline-block;
+            padding: 0.2rem 0.6rem;
+            border-radius: 6px;
+            font-weight: 600;
+            font-size: 0.8rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }}
+        .risk-safe {{ background: rgba(16, 185, 129, 0.15); color: var(--green); }}
+        .risk-low {{ background: rgba(59, 130, 246, 0.15); color: var(--blue); }}
+        .risk-warning {{ background: rgba(245, 158, 11, 0.15); color: var(--yellow); }}
+        .risk-danger {{ background: rgba(239, 68, 68, 0.15); color: var(--red); }}
         .rec-card {{
             background: var(--card);
             border-radius: 12px;
@@ -531,6 +751,7 @@ def format_html(results: Dict[str, Any]) -> str:
                     <tr>
                         <th>IP Address</th>
                         <th>Score</th>
+                        <th>Risk</th>
                         <th>Label</th>
                         <th>Requests</th>
                         <th>Duration</th>
@@ -547,13 +768,112 @@ def format_html(results: Dict[str, Any]) -> str:
         
         <div class="footer">
             <p>Powered by <a href="https://github.com/karpathy/micrograd">micrograd</a> · Microguard v0.1.0</p>
-            <p>Report generated for bot traffic analysis. Threshold: {threshold:.0%} (above = bot)</p>
+            <p>Score scale: <strong style="color: var(--green)">SAFE</strong> (0.00-0.30) · <strong style="color: var(--blue)">LOW</strong> (0.31-0.59) · <strong style="color: var(--yellow)">WARNING</strong> (0.60-0.79) · <strong style="color: var(--red)">DANGER</strong> (0.80-1.00)</p>
+            <p>Threshold: {threshold:.0%} — sessions above this score are classified as bots</p>
         </div>
     </div>
 </body>
 </html>"""
     
     return html
+
+
+def format_verbose(results: Dict[str, Any]) -> str:
+    """Format results with full feature vectors and heuristic rule details.
+    
+    Args:
+        results: Same dictionary as format_terminal
+    """
+    lines = []
+    
+    lines.append("")
+    lines.append(_colorize("  Microguard Bot Traffic Report — Verbose", "bold"))
+    lines.append(_colorize("  ──────────────────────────────────────", "cyan"))
+    lines.append("")
+    
+    total = results.get('total_sessions', 0)
+    bots = results.get('bot_count', 0)
+    humans = results.get('human_count', 0)
+    bot_rate = results.get('bot_rate', 0.0)
+    
+    if bot_rate < 0.1:
+        status_icon = '✅'
+    elif bot_rate < 0.3:
+        status_icon = '⚠️ '
+    else:
+        status_icon = '🚨'
+    
+    lines.append(f"  {status_icon} Bot Traffic: {bot_rate:.1%}")
+    lines.append(f"  Total: {total} sessions ({humans} human, {bots} bot)")
+    lines.append("")
+    
+    sessions = results.get('sessions', [])
+    sorted_sessions = sorted(sessions, key=lambda s: s.get('score', 0), reverse=True)
+    
+    for i, s in enumerate(sorted_sessions):
+        score = s.get('score', 0)
+        label = s.get('label', '?')
+        risk = score_label(score)
+        risk_color = score_label_color(score)
+        
+        lines.append(_colorize(f"  ━━ Session {i+1}: {s['ip']} ━━", "bold"))
+        lines.append(f"  Score: {_colorize(f'{score:.3f}', risk_color)} ({risk}) → {label}")
+        lines.append(f"  User-Agent: {s.get('user_agent', '?')}")
+        lines.append(f"  Requests: {s.get('request_count', 0)}  Duration: {s.get('duration', 0):.1f}s  Top: {s.get('top_endpoint', '?')}")
+        lines.append("")
+        
+        # Heuristic analysis
+        h_label = s.get('heuristic_label', '?')
+        h_conf = s.get('heuristic_confidence', 0)
+        h_reason = s.get('heuristic_reason', '')
+        m_score = s.get('model_score', 0)
+        
+        lines.append(f"  Heuristic: {_colorize(f'{h_label} ({h_conf:.2f})', 'red' if h_label == 'bot' else 'green')}")
+        lines.append(f"    Rule: {h_reason}")
+        lines.append(f"  ML Model:  {m_score:.3f}")
+        lines.append("")
+        
+        # Feature vector
+        features = s.get('features', {})
+        if features:
+            lines.append(_colorize("  Feature Vector (19 dimensions):", "cyan"))
+            lines.append("  " + "─" * 55)
+            lines.append(f"  {'Feature':<35} {'Value':>10}  {'Status'}")
+            lines.append("  " + "─" * 55)
+            
+            # Classify features as bot/human indicators
+            bot_indicators = [
+                'time_since_last_request', 'requests_per_minute_1m',
+                'requests_per_minute_5m', 'same_endpoint_hits',
+                'method_mismatch_count', 'error_rate',
+            ]
+            human_indicators = [
+                'inter_request_time_cv', 'endpoint_count',
+                'endpoint_sequence_entropy', 'unique_endpoint_ratio',
+                'has_accept_language', 'header_consistency_score',
+            ]
+            
+            for name, val in features.items():
+                if name in bot_indicators and val > 0:
+                    indicator = _colorize('▲ bot', 'red')
+                elif name in human_indicators and val > 0:
+                    indicator = _colorize('▼ human', 'green')
+                elif name == 'ua_category':
+                    cats = {0.0: 'browser', 1.0: 'bot', 2.0: 'unknown'}
+                    indicator = cats.get(val, '?')
+                    indicator = _colorize(f'  {indicator}', 'red' if val == 1.0 else 'green' if val == 0.0 else 'yellow')
+                elif name == 'field_fill_speed' and val == 0.0:
+                    indicator = 'N/A (logs)'
+                else:
+                    indicator = ''
+                
+                lines.append(f"  {name:<35} {val:>10.4f}  {indicator}")
+            
+            lines.append("  " + "─" * 55)
+        
+        lines.append("")
+    
+    return "\n".join(lines)
 
 
 def print_report(results: Dict[str, Any], fmt: str = 'terminal'):

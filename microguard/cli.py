@@ -211,6 +211,21 @@ def main():
         default=30,
         help='Session timeout in minutes (default: 30)'
     )
+    scan_parser.add_argument(
+        '--verbose', '-v',
+        action='store_true',
+        help='Show detailed feature vectors and heuristic rule breakdown'
+    )
+    scan_parser.add_argument(
+        '--json-pretty', '-j',
+        action='store_true',
+        help='Output colored JSON for terminal reading (human-friendly)'
+    )
+    scan_parser.add_argument(
+        '--watch', '-w',
+        action='store_true',
+        help='Continuously monitor log file for new bot traffic (tails the file)'
+    )
     
     # probe command
     probe_parser = subparsers.add_parser(
@@ -277,6 +292,16 @@ def main():
         default=None,
         help='Custom User-Agent header (default: Chrome)'
     )
+    probe_parser.add_argument(
+        '--verbose', '-v',
+        action='store_true',
+        help='Show detailed feature vectors and heuristic rule breakdown'
+    )
+    probe_parser.add_argument(
+        '--json-pretty', '-j',
+        action='store_true',
+        help='Output colored JSON for terminal reading (human-friendly)'
+    )
     
     # info command
     subparsers.add_parser(
@@ -287,6 +312,17 @@ def main():
     args = parser.parse_args()
     
     if args.command == 'scan':
+        # Watch mode: continuous monitoring
+        if args.watch:
+            from .watch import watch_logfile
+            watch_logfile(
+                filepath=args.logfile,
+                fmt=args.format,
+                threshold=args.threshold,
+                model_path=args.model,
+            )
+            sys.exit(0)
+        
         # Validate file exists
         if not os.path.exists(args.logfile):
             print(f"❌ Error: Log file not found: {args.logfile}", file=sys.stderr)
@@ -302,7 +338,19 @@ def main():
         )
         
         # Print report
-        if args.output_file:
+        if args.verbose:
+            from .report import format_verbose
+            content = format_verbose(results)
+            if args.output_file:
+                with open(args.output_file, 'w', encoding='utf-8') as f:
+                    f.write(content)
+                print(f"📄 Report saved to {args.output_file}", file=sys.stderr)
+            else:
+                print(content)
+        elif args.json_pretty:
+            from .report import format_json_pretty
+            print(format_json_pretty(results))
+        elif args.output_file:
             from .report import format_terminal, format_json, format_html
             if args.output == 'html':
                 content = format_html(results)
@@ -346,7 +394,13 @@ def main():
         )
         
         # Format and output
-        if args.output == 'json':
+        if args.verbose:
+            from .scanner import format_probe_verbose
+            content = format_probe_verbose(results)
+        elif args.json_pretty:
+            from .report import format_json_pretty
+            content = format_json_pretty(results)
+        elif args.output == 'json':
             content = json.dumps(results, indent=2, default=str)
         elif args.output == 'html':
             from .scanner import format_probe_html
@@ -378,7 +432,7 @@ def main():
         print("")
         print("   Features:")
         print("   • 19 HTTP-level features for bot detection")
-        print("   • micrograd neural network (465 parameters, ~5KB)")
+        print("   • micrograd neural network (85 parameters, ~1.8KB)")
         print("   • Heuristic rules + ML model combined scoring")
         print("   • Live URL probing with timing analysis")
         print("   • Streaming log processing (handles large files)")
@@ -386,8 +440,38 @@ def main():
         print("   • Zero external dependencies (beyond micrograd)")
     
     else:
-        parser.print_help()
-        sys.exit(1)
+        # T2: Auto-sample on first run — scan bundled sample log
+        sample_path = os.path.join(
+            os.path.dirname(__file__), '..', 'data', 'sample_access.log'
+        )
+        if os.path.exists(sample_path):
+            print("🔍 Microguard — Bot Traffic Audit Tool")
+            print("   Powered by micrograd")
+            print()
+            print("   No command specified. Running sample scan...")
+            print(f"   (Scan your own logs with: microguard scan <logfile>)")
+            print()
+            
+            results = scan_logfile(
+                filepath=sample_path,
+                fmt='auto',
+                threshold=DEFAULT_THRESHOLD,
+                model_path=DEFAULT_MODEL_PATH,
+            )
+            print_report(results, fmt='terminal')
+            
+            print("\n─── What just happened? ───")
+            print("   Microguard analyzed a sample log file for bot traffic.")
+            print("   The model scored each session 0.0 (human) to 1.0 (bot).")
+            print()
+            print("   Next steps:")
+            print("   • Scan your own logs:  microguard scan access.log")
+            print("   • Probe a live URL:    microguard probe https://yourapi.com")
+            print("   • See all options:     microguard --help")
+            print()
+        else:
+            parser.print_help()
+        sys.exit(0)
 
 
 if __name__ == '__main__':

@@ -32,6 +32,159 @@ HIGH_CONFIDENCE_BOT_PATTERNS = [
 HIGH_CONF_BOT_RE = re.compile('|'.join(HIGH_CONFIDENCE_BOT_PATTERNS), re.IGNORECASE)
 
 
+# --- Cloudflare WAF / CDN detection ---
+# Requests that bypass Cloudflare (direct IP access) or hit protected endpoints
+CLOUDFLARE_BYPASS_UA = [
+    r'cf-', r'cloudflare', r'incapsula', r'akamai', r'sucuri', r'akamaighost',
+]
+CLOUDFLARE_BYPASS_RE = re.compile('|'.join(CLOUDFLARE_BYPASS_UA), re.IGNORECASE)
+
+# Endpoints commonly behind Cloudflare WAF
+CLOUDFLARE_PROTECTED_ENDPOINTS = [
+    '/wp-admin', '/wp-login', '/wp-json', '/xmlrpc.php',
+    '/.env', '/.git', '/config', '/debug', '/phpinfo',
+    '/admin', '/dashboard', '/console', '/manager',
+    '/.well-known', '/api/v1/auth', '/api/v2/auth',
+]
+
+# --- API key / credential scanning patterns ---
+# Bot patterns targeting authentication endpoints
+API_KEY_SCAN_PATTERNS = [
+    r'\?key=', r'\?token=', r'\?api_key=', r'\?apikey=',
+    r'\?access_token=', r'\?auth=', r'\?password=', r'\?pass=',
+    r'\?secret=', r'\?credential=', r'\?jwt=', r'\?bearer=',
+    r'/api/.*key', r'/api/.*token', r'/api/.*auth', r'/api/.*login',
+    r'/oauth2?/', r'/jwt/', r'/token', r'/authenticate',
+    r'/signup', r'/register', r'/forgot-password',
+    r'/graphql', r'/_debug',
+]
+API_KEY_SCAN_RE = re.compile('|'.join(API_KEY_SCAN_PATTERNS), re.IGNORECASE)
+
+# --- Known botnet / attack signatures ---
+# Mirai and IoT botnet scanning patterns
+BOTNET_URL_PATTERNS = [
+    r'/shell\.cgi', r'/omega\.cgi', r'/adv', r'/boaform',
+    r'/HNAP1', r'/tr069', r'/cpe', r'/device',
+    r'/HNAP', r'/goform', r'/cgi-bin/luci',
+    r'\.asp$', r'\.cgi$', r'\.php$',  # common IoT endpoints
+    r'/cmd', r'/system', r'/exec', r'/run',
+]
+BOTNET_URL_RE = re.compile('|'.join(BOTNET_URL_PATTERNS), re.IGNORECASE)
+
+# Credential stuffing / brute-force patterns
+BRUTE_FORCE_ENDPOINTS = [
+    '/wp-login.php', '/wp-admin', '/xmlrpc.php',
+    '/wp-json/wp/v2/users', '/?rest_route=/wp/v2/users',
+    '/login', '/signin', '/auth', '/api/login',
+    '/api/auth/login', '/api/v1/login', '/api/v2/login',
+]
+
+# Known attack tool signatures in user agents
+ATTACK_TOOL_UA_PATTERNS = [
+    r'Masscan', r'Nmap', r'ZmEu', r'nikto', r'sqlmap',
+    r'Havij', r'w3af', r'OpenVAS', r'Nessus', r'Qualys',
+    r'Wapiti', r'Arachni', r'DirBuster', r'Gobuster', r'Feroxbuster',
+    r'wfuzz', r'Switchblade', r'Katory', r'fuzz',
+    r'ZmEu', r'WinHTTP', r'WinInet',
+    r'Nuclei', r'ffuf', r'feroxbuster',
+    r'Go\s*net/http',  # Go HTTP client (common in attack tools)
+]
+ATTACK_TOOL_RE = re.compile('|'.join(ATTACK_TOOL_UA_PATTERNS), re.IGNORECASE)
+
+
+def _check_cloudflare_signals(session: Session) -> Tuple[bool, str]:
+    """Check for Cloudflare WAF bypass or protection signals.
+    
+    Returns:
+        (is_bot, reason)
+    """
+    entries = session.requests
+    ua = session.user_agent.lower()
+    urls = [e.url.split('?')[0] for e in entries]
+    
+    # Cloudflare-specific UA patterns (bypassing WAF)
+    if CLOUDFLARE_BYPASS_RE.search(ua):
+        return True, 'Cloudflare WAF bypass UA detected'
+    
+    # Requests targeting Cloudflare-protected endpoints with no referrer
+    no_referrer = sum(1 for e in entries if e.referer in ('-', '', 'none'))
+    protected_hits = sum(
+        1 for url in urls
+        if any(p in url.lower() for p in CLOUDFLARE_PROTECTED_ENDPOINTS)
+    )
+    if protected_hits > 0 and no_referrer == len(entries):
+        return True, f'WAF-protected endpoint scan ({protected_hits} hits, no referrer)'
+    
+    return False, ''
+
+
+def _check_api_key_patterns(session: Session) -> Tuple[bool, str]:
+    """Check for API key scanning or credential brute-force patterns.
+    
+    Returns:
+        (is_bot, reason)
+    """
+    entries = session.requests
+    urls = [e.url for e in entries]
+    
+    # API key parameter scanning
+    key_param_hits = sum(1 for url in urls if API_KEY_SCAN_RE.search(url))
+    if key_param_hits > 0 and key_param_hits / len(entries) > 0.5:
+        return True, f'API key parameter scanning ({key_param_hits}/{len(entries)} requests)'
+    
+    # Credential brute-force (rapid attempts to auth endpoints)
+    auth_hits = sum(
+        1 for url in urls
+        if any(ep in url.lower() for ep in BRUTE_FORCE_ENDPOINTS)
+    )
+    if auth_hits >= 5 and session.duration < 300:
+        rate = auth_hits / (session.duration / 60.0) if session.duration > 0 else 999
+        if rate > 5:
+            return True, f'credential brute-force ({auth_hits} auth attempts in {session.duration:.0f}s)'
+    
+    # Rapid POST to auth endpoints
+    post_auth = sum(
+        1 for e in entries
+        if e.method == 'POST' and any(ep in e.url.lower() for ep in BRUTE_FORCE_ENDPOINTS)
+    )
+    if post_auth >= 10:
+        return True, f'POST brute-force ({post_auth} POST to auth endpoints)'
+    
+    return False, ''
+
+
+def _check_botnet_signatures(session: Session) -> Tuple[bool, str]:
+    """Check for known botnet and attack tool signatures.
+    
+    Returns:
+        (is_bot, reason)
+    """
+    entries = session.requests
+    ua = session.user_agent.lower()
+    urls = [e.url for e in entries]
+    
+    # Known attack tools
+    if ATTACK_TOOL_RE.search(ua):
+        return True, f'attack tool UA: {session.user_agent[:50]}'
+    
+    # Botnet URL patterns (Mirai, IoT scanning)
+    botnet_hits = sum(1 for url in urls if BOTNET_URL_RE.search(url))
+    if botnet_hits > 0 and botnet_hits / len(entries) > 0.3:
+        return True, f'botnet scanning pattern ({botnet_hits} IoT endpoint hits)'
+    
+    # High-volume scanning with 403/404 responses (directory brute-force)
+    errors_4xx = sum(1 for e in entries if 400 <= e.status < 500)
+    if errors_4xx / len(entries) > 0.7 and session.request_count > 30:
+        return True, f'directory brute-force ({errors_4xx}/{len(entries)} 4xx responses)'
+    
+    # User-agent rotation (common in distributed attacks)
+    ua_variants = set(e.user_agent for e in entries)
+    if len(ua_variants) > min(10, session.request_count * 0.3):
+        return True, f'UA rotation ({len(ua_variants)} variants in {session.request_count} requests)'
+    
+    return False, ''
+
+
 def label_session(session: Session) -> Tuple[str, float, str]:
     """Label a session as 'bot' or 'human' with confidence.
     
@@ -79,6 +232,20 @@ def label_session(session: Session) -> Tuple[str, float, str]:
         if session.request_count > 5:
             return 'bot', 0.90, 'all requests use HTTP/1.0 (not a modern browser)'
     
+    # 5. Cloudflare WAF bypass / protected endpoint scanning
+    cf_bot, cf_reason = _check_cloudflare_signals(session)
+    if cf_bot:
+        return 'bot', 0.90, f'Cloudflare WAF: {cf_reason}'
+    
+    # 6. Known attack tool user agent
+    if ATTACK_TOOL_RE.search(ua):
+        return 'bot', 0.90, f'attack tool detected: {session.user_agent[:50]}'
+    
+    # 7. Botnet scanning patterns (Mirai, IoT)
+    botnet_bot, botnet_reason = _check_botnet_signatures(session)
+    if botnet_bot:
+        return 'bot', 0.88, botnet_reason
+    
     # === MEDIUM CONFIDENCE BOT SIGNALS (0.70-0.89) ===
     
     # 5. Very high request rate (>100 requests in session)
@@ -113,6 +280,11 @@ def label_session(session: Session) -> Tuple[str, float, str]:
     if most_common_count > 20 and most_common_count / len(entries) > 0.7:
         return 'bot', 0.70, f'repeated endpoint hit {most_common_count} times'
     
+    # 11. API key scanning / credential brute-force
+    api_bot, api_reason = _check_api_key_patterns(session)
+    if api_bot:
+        return 'bot', 0.75, api_reason
+    
     # === LOW CONFIDENCE BOT SIGNALS (0.55-0.69) ===
     
     # 11. Unknown user agent (not a known browser)
@@ -131,12 +303,12 @@ def label_session(session: Session) -> Tuple[str, float, str]:
     
     # === HUMAN SIGNALS (0.55-0.75) ===
     
-    # 14. Known browser user agent with normal behavior
+    # 15. Known browser user agent with normal behavior
     if BROWSER_UA_RE.search(ua):
         if session.request_count < 50 and session.duration > 30:
             return 'human', 0.75, f'known browser, reasonable session ({session.request_count} req, {session.duration:.0f}s)'
     
-    # 15. Variable timing pattern (high CV)
+    # 16. Variable timing pattern (high CV)
     if session.request_count >= 3:
         timestamps = sorted([e.timestamp for e in entries])
         gaps = [(timestamps[i+1] - timestamps[i]).total_seconds() 
@@ -147,14 +319,19 @@ def label_session(session: Session) -> Tuple[str, float, str]:
             if avg_gap > 0 and max_gap / avg_gap > 3.0:
                 return 'human', 0.70, f'variable timing (max/avg ratio: {max_gap/avg_gap:.1f})'
     
-    # 16. Multiple different endpoints explored (browsing pattern)
+    # 17. Multiple different endpoints explored (browsing pattern)
     if len(unique_urls) >= 5 and session.request_count >= 5:
         return 'human', 0.65, f'exploring {len(unique_urls)} different endpoints'
     
-    # 17. Has referer chain (natural navigation)
+    # 18. Has referer chain (natural navigation)
     has_referer = sum(1 for e in entries if e.referer not in ('-', '', 'none'))
     if has_referer > len(entries) * 0.5 and session.request_count >= 3:
         return 'human', 0.60, f'natural navigation with {has_referer} referrers'
+    
+    # 19. Behind Cloudflare with normal browser (likely real user)
+    if CLOUDFLARE_BYPASS_RE.search(ua) and BROWSER_UA_RE.search(ua):
+        if session.request_count < 30:
+            return 'human', 0.65, 'Cloudflare-protected site, normal browser'
     
     # === DEFAULT ===
     

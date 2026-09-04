@@ -4,9 +4,7 @@ Makes requests to a target URL and extracts bot-detection features
 from the response. No external dependencies — uses stdlib only.
 """
 
-import json
 import math
-import re
 import ssl
 import time
 import urllib.request
@@ -14,6 +12,7 @@ import urllib.error
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 from collections import Counter
+from .report import score_label, score_label_color
 
 
 @dataclass
@@ -448,6 +447,118 @@ def _analyze_probes(
     return 0.3, 'no strong bot signals detected'
 
 
+def format_probe_verbose(result: Dict) -> str:
+    """Format probe result with full feature details and rule analysis.
+    
+    Args:
+        result: Dictionary from probe_and_analyze()
+    
+    Returns:
+        Formatted verbose string for terminal display
+    """
+    lines = []
+    
+    reset = '\033[0m'
+    bold = '\033[1m'
+    cyan = '\033[96m'
+    
+    lines.append("")
+    lines.append(f"{bold}  Microguard URL Probe — Verbose{reset}")
+    lines.append(f"{cyan}  ──────────────────────────────{reset}")
+    lines.append("")
+    
+    score = result['combined_score']
+    label = result['label']
+    heuristic_score = result['heuristic_score']
+    heuristic_reason = result['heuristic_reason']
+    model_score = result['model_score']
+    
+    if score > 0.7:
+        score_ansi = '\033[91m'
+        icon = '🚨'
+    elif score > 0.3:
+        score_ansi = '\033[93m'
+        icon = '⚠️ '
+    else:
+        score_ansi = '\033[92m'
+        icon = '✅'
+    
+    from .report import score_label, score_label_color
+    risk = score_label(score)
+    
+    lines.append(f"  🌐 Target:    {result['url']}")
+    lines.append(f"  📡 Status:    HTTP {result['status_code']}")
+    lines.append(f"  ⏱️  Response:  {result['timing'].get('total', 0):.3f}s")
+    lines.append(f"  🔍 Probes:    {result['probes']}")
+    lines.append("")
+    lines.append(f"  {icon} Score: {score_ansi}{score:.3f}{reset} — {risk} ({label.upper()})")
+    lines.append("")
+    
+    # Analysis breakdown
+    lines.append(f"{bold}  Analysis:{reset}")
+    lines.append(f"    Heuristic: {heuristic_score:.3f}")
+    lines.append(f"      Rule: {heuristic_reason}")
+    if model_score > 0:
+        lines.append(f"    ML Model:  {model_score:.3f}")
+    lines.append("")
+    
+    # Full feature vector
+    features = result.get('features', {})
+    if features:
+        lines.append(f"{bold}{cyan}  Feature Vector:{reset}")
+        lines.append("  " + "─" * 55)
+        lines.append(f"  {'Feature':<35} {'Value':>10}  Notes")
+        lines.append("  " + "─" * 55)
+        
+        for name, val in features.items():
+            # Add context for key features
+            if name == 'response_time':
+                note = f'{val*1000:.0f}ms'
+            elif name == 'ttfb':
+                note = f'{val*1000:.0f}ms'
+            elif name == 'timing_cv':
+                if val < 0.05:
+                    note = f'{bold}bot signal{reset}'
+                elif val < 0.2:
+                    note = 'moderate'
+                else:
+                    note = 'variable (human)'
+            elif name == 'status_code':
+                code = int(val * 1000)
+                note = f'HTTP {code}'
+            elif name in ('has_content_security_policy', 'has_x_frame_options', 'has_strict_transport', 'has_server_header'):
+                note = 'yes' if val > 0.5 else 'no'
+            elif name == 'body_entropy':
+                if val < 1.0:
+                    note = 'low (empty?)'
+                elif val > 7.0:
+                    note = 'high (compressed?)'
+                else:
+                    note = 'normal'
+            elif name == 'body_length':
+                note = f'{val * 100:.0f}KB'
+            else:
+                note = ''
+            
+            lines.append(f"  {name:<35} {val:>10.4f}  {note}")
+        
+        lines.append("  " + "─" * 55)
+    
+    # Headers
+    headers = result.get('headers', {})
+    if headers:
+        lines.append("")
+        lines.append(f"{bold}  Response Headers:{reset}")
+        for k, v in sorted(headers.items()):
+            if len(v) > 60:
+                v = v[:57] + '...'
+            lines.append(f"    {k}: {v}")
+    
+    lines.append("")
+    
+    return '\n'.join(lines)
+
+
 def format_probe_report(result: Dict) -> str:
     """Format probe result for terminal output.
     
@@ -487,7 +598,11 @@ def format_probe_report(result: Dict) -> str:
         icon = '✅'
     
     reset = '\033[0m'
-    lines.append(f"  {icon} Bot Score: {score_color}{score:.2f}{reset} ({label.upper()})")
+    risk = score_label(score)
+    risk_ansi = score_label_color(score)
+    risk_colors = {'green': '\033[92m', 'blue': '\033[94m', 'yellow': '\033[93m', 'red': '\033[91m'}
+    risk_ansi_color = risk_colors.get(risk_ansi, '')
+    lines.append(f"  {icon} Bot Score: {score_color}{score:.2f}{reset} — {risk_ansi_color}{risk}{reset} ({label.upper()})")
     lines.append(f"  📊 Threshold: {result['threshold']:.2f}")
     lines.append("")
     

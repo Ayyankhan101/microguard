@@ -55,6 +55,50 @@ def prepare_training_data(
     return features_list, labels_list
 
 
+def compute_normalization(features: List[List[float]]) -> Tuple[List[float], List[float]]:
+    """Compute min/max normalization parameters from feature vectors.
+    
+    Args:
+        features: List of feature vectors
+    
+    Returns:
+        (mins, maxs) tuple
+    """
+    n_feat = len(features[0])
+    mins = [float('inf')] * n_feat
+    maxs = [float('-inf')] * n_feat
+    
+    for row in features:
+        for i, v in enumerate(row):
+            if v < mins[i]:
+                mins[i] = v
+            if v > maxs[i]:
+                maxs[i] = v
+    
+    return mins, maxs
+
+
+def normalize_features(
+    features: List[List[float]],
+    mins: List[float],
+    maxs: List[float],
+) -> List[List[float]]:
+    """Normalize features to [0, 1] range.
+    
+    Features with zero range (min == max) map to 0.5.
+    """
+    normalized = []
+    for row in features:
+        norm_row = []
+        for i, v in enumerate(row):
+            if maxs[i] > mins[i]:
+                norm_row.append((v - mins[i]) / (maxs[i] - mins[i]))
+            else:
+                norm_row.append(0.5)  # Zero-range feature
+        normalized.append(norm_row)
+    return normalized
+
+
 def train_model(
     features: List[List[float]],
     labels: List[float],
@@ -62,7 +106,10 @@ def train_model(
     epochs: int = 100,
     learning_rate: float = 0.05,
 ) -> BotDetector:
-    """Train the bot detection model.
+    """Train the bot detection model with normalization.
+    
+    Computes normalization from training data, normalizes features,
+    saves normalization.json alongside model.json.
     
     Args:
         features: List of feature vectors
@@ -79,7 +126,27 @@ def train_model(
     print(f"   Bot: {sum(labels):.0f} | Human: {len(labels) - sum(labels):.0f}")
     print(f"   Epochs: {epochs} | LR: {learning_rate}")
     
+    # Compute normalization from training data
+    mins, maxs = compute_normalization(features)
+    
+    # Save normalization params
+    norm_path = os.path.join(os.path.dirname(model_path) or '.', 'normalization.json')
+    os.makedirs(os.path.dirname(norm_path) or '.', exist_ok=True)
+    with open(norm_path, 'w') as f:
+        json.dump({'mins': mins, 'maxs': maxs}, f, indent=2)
+    print(f"   Normalization saved to: {norm_path}")
+    
+    # Keep raw features and labels for evaluation (predict() normalizes internally)
+    raw_features = features[:]
+    raw_labels = labels[:]
+    
+    # Normalize features for training
+    features = normalize_features(features, mins, maxs)
+    
     model = BotDetector()
+    # Disable normalization in predict() — features are already normalized
+    model.norm_mins = None
+    model.norm_maxs = None
     
     # Shuffle data
     combined = list(zip(features, labels))
@@ -99,24 +166,28 @@ def train_model(
         verbose=True,
     )
     
+    # Restore normalization params so predict() works at inference time
+    model.norm_mins = mins
+    model.norm_maxs = maxs
+    
     # Save model
     os.makedirs(os.path.dirname(model_path) or '.', exist_ok=True)
     model.save(model_path)
     print(f"\n💾 Model saved to: {model_path}")
     
-    # Evaluate
+    # Evaluate (predict_batch normalizes internally using restored params)
     print("\n📊 Final Evaluation:")
-    all_preds = model.predict_batch(features)
-    correct = sum(1 for pred, label in zip(all_preds, labels) 
+    all_preds = model.predict_batch(raw_features)
+    correct = sum(1 for pred, label in zip(all_preds, raw_labels) 
                   if (pred > 0.5) == (label > 0.5))
     accuracy = correct / len(labels) if labels else 0.0
     print(f"   Accuracy: {accuracy:.1%}")
     
     # Confusion matrix
-    tp = sum(1 for p, l in zip(all_preds, labels) if p > 0.5 and l > 0.5)
-    tn = sum(1 for p, l in zip(all_preds, labels) if p <= 0.5 and l <= 0.5)
-    fp = sum(1 for p, l in zip(all_preds, labels) if p > 0.5 and l <= 0.5)
-    fn = sum(1 for p, l in zip(all_preds, labels) if p <= 0.5 and l > 0.5)
+    tp = sum(1 for p, l in zip(all_preds, raw_labels) if p > 0.5 and l > 0.5)
+    tn = sum(1 for p, l in zip(all_preds, raw_labels) if p <= 0.5 and l <= 0.5)
+    fp = sum(1 for p, l in zip(all_preds, raw_labels) if p > 0.5 and l <= 0.5)
+    fn = sum(1 for p, l in zip(all_preds, raw_labels) if p <= 0.5 and l > 0.5)
     
     print(f"   True Positives:  {tp} (correctly caught bots)")
     print(f"   True Negatives:  {tn} (correctly passed humans)")
@@ -136,26 +207,42 @@ def train_model(
 
 def main():
     """Main training entry point."""
-    # Try to load Harvard Shopping Logs dataset
-    data_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'data')
-    dataset_path = os.path.join(data_dir, 'access.log')
+    data_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), 'data')
     
-    if not os.path.exists(dataset_path):
-        print("📥 Dataset not found. Generating synthetic training data...")
-        print("   (For real training, download Harvard Shopping Logs:")
-        print("    https://dataverse.harvard.edu/dataset.xhtml?persistentId=doi:10.7910/DVN/3QBYB5)")
-        print()
-        
-        # Generate synthetic data for initial training
-        features, labels = generate_synthetic_data(n_samples=500)
-        print(f"   Generated {len(features)} synthetic samples")
-    else:
+    # Priority 1: Harvard training data (pre-processed from Dataverse)
+    harvard_path = os.path.join(data_dir, 'harvard_training_data.json')
+    if os.path.exists(harvard_path):
+        print(f"📂 Loading Harvard training data from: {harvard_path}")
+        with open(harvard_path) as f:
+            data = json.load(f)
+        features = data['features']
+        labels = data['labels']
+        print(f"   Samples: {len(features)} (Human: {data.get('n_human', '?')}, Bot: {data.get('n_bot', '?')})")
+    
+    # Priority 2: Real training data (Zenodo + synthetic combined)
+    elif os.path.exists(os.path.join(data_dir, 'real_training_data.json')):
+        real_path = os.path.join(data_dir, 'real_training_data.json')
+        print(f"📂 Loading real training data from: {real_path}")
+        with open(real_path) as f:
+            data = json.load(f)
+        features = data['features']
+        labels = data['labels']
+        print(f"   Samples: {len(features)}")
+    
+    # Priority 3: Raw logs (Zenodo Apache logs)
+    elif os.path.exists(os.path.join(data_dir, 'access.log')):
+        dataset_path = os.path.join(data_dir, 'access.log')
         print(f"📂 Loading dataset from: {dataset_path}")
         entries = list(parse_file(dataset_path))
         print(f"   Parsed {len(entries)} log entries")
-        
         features, labels = prepare_training_data(entries)
         print(f"   Extracted {len(features)} sessions")
+    
+    # Priority 4: Synthetic fallback
+    else:
+        print("📥 No dataset found. Generating synthetic training data...")
+        features, labels = generate_synthetic_data(n_samples=500)
+        print(f"   Generated {len(features)} synthetic samples")
     
     # Train model
     model_path = os.path.join(data_dir, 'model.json')

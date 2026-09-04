@@ -167,6 +167,23 @@ class TestFormatTerminal:
         output = format_terminal(result)
         assert 'Healthy' in output or 'healthy' in output
 
+    def test_parse_error_shows_warning_not_healthy(self):
+        # Regression: ISSUE-001 — a log file with zero parsed entries (empty
+        # or malformed) rendered as a normal "0.0% HEALTHY" report with no
+        # indication anything was wrong, because scan_logfile's 'error' key
+        # was silently dropped by format_terminal.
+        # Found by /qa on 2026-09-04
+        # Report: .gstack/qa-reports/qa-report-microguard-cli-2026-09-04.md
+        result = {
+            'total_sessions': 0, 'bot_count': 0, 'human_count': 0,
+            'bot_rate': 0.0, 'sessions': [],
+            'error': 'No valid log entries found',
+        }
+        output = format_terminal(result)
+        assert 'No valid log entries found' in output
+        assert 'HEALTHY' not in output
+        assert 'Total sessions' not in output
+
 
 class TestFormatJson:
     """Tests for format_json function."""
@@ -333,6 +350,26 @@ class TestFormatHtml:
         }
         output = format_html(result)
         assert '<!DOCTYPE html>' in output
+
+    def test_parse_error_shows_no_data_not_healthy(self):
+        # Regression: ISSUE-002 — with zero sessions and no 'error' handling,
+        # the donut chart's conic-gradient defaulted the empty bot slice to
+        # red (100% of the ring), directly contradicting the adjacent
+        # "Healthy" status text it was drawn next to.
+        # Found by /qa on 2026-09-04
+        # Report: .gstack/qa-reports/qa-report-microguard-cli-2026-09-04.md
+        result = {
+            'total_sessions': 0, 'bot_count': 0, 'human_count': 0,
+            'bot_rate': 0.0, 'threshold': 0.7, 'model_used': False,
+            'summary': {'total_entries': 0}, 'sessions': [],
+            'error': 'No valid log entries found',
+        }
+        output = format_html(result)
+        assert 'No valid log entries found' in output
+        assert 'No Data' in output
+        assert '>Healthy<' not in output
+        # Donut's bot slice must be neutral gray, not danger-red, when empty
+        assert '#6b7280 0.0deg 360deg' in output
 
 
 class TestPrintReport:

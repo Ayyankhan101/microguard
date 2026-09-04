@@ -77,13 +77,19 @@ def format_terminal(results: dict[str, Any]) -> str:
             - summary: dict with aggregate stats
     """
     lines = []
-    
+
     # Header
     lines.append("")
     lines.append(_colorize("  Microguard Bot Traffic Report", "bold"))
     lines.append(_colorize("  ─────────────────────────────", "cyan"))
     lines.append("")
-    
+
+    if results.get('error'):
+        lines.append(_colorize(f"  ⚠️  {results['error']}", "yellow"))
+        lines.append("     Check that the log file matches the expected format (nginx combined or JSON) and isn't empty.")
+        lines.append("")
+        return '\n'.join(lines)
+
     # Summary stats
     total = results.get('total_sessions', 0)
     bots = results.get('bot_count', 0)
@@ -361,12 +367,16 @@ def format_html(results: dict[str, Any]) -> str:
     threshold = results.get('threshold', 0.7)
     model_used = results.get('model_used', False)
     summary = results.get('summary', {})
-    
+    error_message = results.get('error')
+
     # Sort sessions by score descending
     sorted_sessions = sorted(sessions, key=lambda s: s.get('score', 0), reverse=True)
-    
+
     # Determine status level
-    if bot_rate < 0.1:
+    if error_message:
+        status_text = 'No Data'
+        status_color = '#6b7280'
+    elif bot_rate < 0.1:
         status_text = 'Healthy'
         status_color = '#10b981'
     elif bot_rate < 0.3:
@@ -375,6 +385,18 @@ def format_html(results: dict[str, Any]) -> str:
     else:
         status_text = 'Critical'
         status_color = '#ef4444'
+
+    # Donut "bot" slice is neutral gray (not red) when there's no session
+    # data — an empty ring shouldn't read as 100% bot traffic.
+    donut_bot_color = '#ef4444' if total > 0 else '#6b7280'
+
+    error_banner = ''
+    if error_message:
+        error_banner = f"""
+        <div class="rec-card warning">
+            <h3>⚠️ {error_message}</h3>
+            <p>Check that the log file matches the expected format (nginx combined or JSON) and isn't empty.</p>
+        </div>"""
     
     # Build session table rows
     session_rows = ''
@@ -422,7 +444,17 @@ def format_html(results: dict[str, Any]) -> str:
     
     # Recommendations
     recommendations = ''
-    if bot_rate > 0.3:
+    if error_message:
+        recommendations = f"""
+        <div class="rec-card warning">
+            <h3>⚠️ No Valid Log Entries</h3>
+            <ul>
+                <li>{error_message}</li>
+                <li>Check that the log file matches the expected format (nginx combined or JSON)</li>
+                <li>Verify the file isn't empty</li>
+            </ul>
+        </div>"""
+    elif bot_rate > 0.3:
         recommendations = """
         <div class="rec-card danger">
             <h3>🚨 High Bot Traffic Detected</h3>
@@ -539,7 +571,7 @@ def format_html(results: dict[str, Any]) -> str:
             position: relative;
             background: conic-gradient(
                 var(--green) 0deg {human_pct:.1f}deg,
-                var(--red) {human_pct:.1f}deg 360deg
+                {donut_bot_color} {human_pct:.1f}deg 360deg
             );
         }}
         .donut-chart::after {{
@@ -676,7 +708,7 @@ def format_html(results: dict[str, Any]) -> str:
             th {{ background: #f1f5f9; color: #475569; }}
             td {{ border-color: #e2e8f0; }}
             tr:hover {{ background: transparent; }}
-            .donut-chart {{ background: conic-gradient(#10b981 0deg {human_pct:.1f}deg, #ef4444 {human_pct:.1f}deg 360deg); }}
+            .donut-chart {{ background: conic-gradient(#10b981 0deg {human_pct:.1f}deg, {donut_bot_color} {human_pct:.1f}deg 360deg); }}
             .donut-chart::after {{ background: white; }}
             .header h1 span {{ color: #2563eb; }}
             .rec-card {{ background: #f8fafc; }}
@@ -697,7 +729,7 @@ def format_html(results: dict[str, Any]) -> str:
             <span>🧠 Model: {'Enabled' if model_used else 'Heuristic only'}</span>
             <span>🎯 Threshold: {threshold:.0%}</span>
         </div>
-        
+        {error_banner}
         <div class="stats-grid">
             <div class="stat-card status">
                 <div class="value">{bot_rate:.1%}</div>

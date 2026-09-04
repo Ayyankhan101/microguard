@@ -201,49 +201,63 @@ score = model.predict(features)  # 0.0 to 1.0
 
 ## Architecture
 
+```mermaid
+graph TB
+    subgraph CLI["🔍 Microguard CLI"]
+        S[scan] --> P[parser.py]
+        PR[probe] --> SC[scanner.py]
+        W[watch] --> WT[watch.py]
+    end
+
+    P --> F[features.py<br/>19 extractors]
+    SC --> F
+    WT --> F
+
+    F --> L[labeler.py<br/>24 heuristic rules]
+    F --> M[model.py<br/>MLP 19→4→1]
+
+    L --> SF[Score Fusion<br/>60% model + 40% heuristic]
+    M --> SF
+
+    SF --> R[report.py]
+    R --> T1[Terminal<br/>ANSI colors + score bars]
+    R --> T2[JSON<br/>machine-readable]
+    R --> T3[JSON Pretty<br/>colored for terminal]
+    R --> T4[HTML<br/>dark theme + charts]
+    R --> T5[Verbose<br/>feature vectors + rules]
+
+    style CLI fill:#1e293b,stroke:#3b82f6,color:#e2e8f0
+    style F fill:#8b5cf6,stroke:#a78bfa,color:#fff
+    style L fill:#f59e0b,stroke:#fbbf24,color:#000
+    style M fill:#10b981,stroke:#34d399,color:#fff
+    style SF fill:#ef4444,stroke:#f87171,color:#fff
+    style R fill:#3b82f6,stroke:#60a5fa,color:#fff
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                        MICROGUARD CLI                           │
-├─────────────────────────────────────────────────────────────────┤
-│   ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐      │
-│   │  scan    │  │  probe   │  │  watch   │  │  info    │      │
-│   └────┬─────┘  └────┬─────┘  └────┬─────┘  └──────────┘      │
-│        │              │             │                            │
-│        ▼              ▼             ▼                            │
-│   ┌──────────┐  ┌──────────┐  ┌──────────┐                     │
-│   │ parser   │  │ scanner  │  │ watch.py │                     │
-│   │ • Nginx  │  │ • HTTP   │  │ • tail   │                     │
-│   │ • JSON   │  │ • Timing │  │ • detect │                     │
-│   └────┬─────┘  └────┬─────┘  └────┬─────┘                     │
-│        └──────────────┴─────────────┘                            │
-│                       ▼                                          │
-│              ┌─────────────────┐                                 │
-│              │  features.py    │                                 │
-│              │  19 extractors  │                                 │
-│              └────────┬────────┘                                 │
-│           ┌───────────┴───────────┐                              │
-│           ▼                       ▼                              │
-│   ┌──────────────┐       ┌──────────────┐                       │
-│   │  labeler.py  │       │  model.py    │                       │
-│   │  24 rules    │       │  MLP(19→4→1) │                       │
-│   └──────┬───────┘       └──────┬───────┘                       │
-│           └──────────┬──────────┘                                │
-│                      ▼                                           │
-│            ┌─────────────────┐                                   │
-│            │  Score Fusion   │                                   │
-│            │  60% model +    │                                   │
-│            │  40% heuristic  │                                   │
-│            └────────┬────────┘                                   │
-│                     ▼                                            │
-│   ┌──────────────────────────────────────────────┐               │
-│   │  report.py                                   │               │
-│   │  • Terminal (ANSI colors, score bars)        │               │
-│   │  • JSON (machine-readable)                   │               │
-│   │  • JSON Pretty (colored for terminal)        │               │
-│   │  • HTML (dark theme, responsive)             │               │
-│   │  • Verbose (feature vectors + rules)         │               │
-│   └──────────────────────────────────────────────┘               │
-└─────────────────────────────────────────────────────────────────┘
+
+
+
+### Data Flow
+
+```mermaid
+graph TB
+    IN["📥 Log File / Live URL"] --> PAR["Parsing Layer<br/>Nginx / JSON / HTTP"]
+    PAR --> FEAT["Feature Extraction<br/>19 features: timing + behavioral + header + payload + context"]
+    
+    FEAT --> HEUR["Heuristic Rules<br/>24 patterns, confidence 0-1"]
+    FEAT --> ML["micrograd MLP<br/>85 params, score 0-1"]
+    
+    HEUR --> FUSION["Score Fusion<br/>60% model + 40% heuristic"]
+    ML --> FUSION
+    
+    FUSION --> OUT["Output Layer<br/>Terminal / JSON / HTML / Verbose"]
+    
+    style IN fill:#64748b,stroke:#94a3b8,color:#fff
+    style PAR fill:#3b82f6,stroke:#60a5fa,color:#fff
+    style FEAT fill:#8b5cf6,stroke:#a78bfa,color:#fff
+    style HEUR fill:#f59e0b,stroke:#fbbf24,color:#000
+    style ML fill:#10b981,stroke:#34d399,color:#fff
+    style FUSION fill:#ef4444,stroke:#f87171,color:#fff
+    style OUT fill:#3b82f6,stroke:#60a5fa,color:#fff
 ```
 
 ## Heuristic Rules (24 patterns)
@@ -282,28 +296,24 @@ score = model.predict(features)  # 0.0 to 1.0
 
 ## Model Architecture
 
-```
-Input (19 features)
-       │
-       ▼
-┌─────────────┐
-│   Linear    │  19 → 4 (76 params)
-│    + ReLU   │
-└──────┬──────┘
-       │
-       ▼
-┌─────────────┐
-│   Linear    │  4 → 1 (5 params)
-│    + Logit  │
-└──────┬──────┘
-       │
-       ▼
-   Score (0.0 - 1.0)
+```mermaid
+graph LR
+    A["Input<br/>19 features"] -->|19×4 + 4| B["Linear + ReLU<br/>76 params"]
+    B -->|4×1 + 1| C["Linear + Logit<br/>5 params"]
+    C --> D["Score<br/>0.0 - 1.0"]
 
-Total parameters: 85
-Model size: ~1.8KB
-Inference time: < 0.5ms per request
+    style A fill:#8b5cf6,stroke:#a78bfa,color:#fff
+    style B fill:#3b82f6,stroke:#60a5fa,color:#fff
+    style C fill:#10b981,stroke:#34d399,color:#fff
+    style D fill:#f59e0b,stroke:#fbbf24,color:#000
 ```
+
+| Property | Value |
+|----------|-------|
+| Architecture | MLP 19 → 4 → 1 |
+| Parameters | 85 |
+| Model size | ~1.8KB |
+| Inference time | < 0.5ms per request |
 
 ## File Structure
 

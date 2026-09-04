@@ -32,6 +32,7 @@ $ microguard scan access.log
 - **Live URL probing** — test endpoints directly, not just log files
 - **Continuous monitoring** — watch mode tails log files in real time
 - **Multiple output formats** — terminal, JSON, colored JSON, and HTML reports
+- **Auto-generated firewall rules** — nginx deny-list or Cloudflare Firewall Rule expression for DANGER-scored IPs
 - **Score interpretation** — SAFE / LOW / WARNING / DANGER risk labels
 - **Zero external dependencies** — only requires micrograd
 
@@ -92,6 +93,23 @@ microguard scan access.log --output html --output-file report.html
 microguard scan access.log --threshold 0.5
 ```
 
+### Generate Firewall Rules
+
+Emit a ready-to-use block list for IPs scored DANGER (0.80-1.00) — nothing to
+review by hand, just drop it into your infra:
+
+```bash
+# nginx deny-list (include in a server block)
+microguard scan access.log --output nginx --output-file blocklist.conf
+
+# Cloudflare Firewall Rule expression
+microguard scan access.log --output cloudflare
+# → (ip.src in {10.0.0.50 203.0.113.7})
+```
+
+Both formats dedupe and sort IPs, and print a clean "nothing to block"
+message instead of an empty rule when no session scores DANGER.
+
 ### Probe a Live URL
 
 ```bash
@@ -141,15 +159,17 @@ microguard info
 ### Scan Options
 
 ```
-  -f, --format {auto,nginx,json}    Log file format (default: auto-detect)
-  -t, --threshold FLOAT             Bot score threshold (default: 0.7)
-  -m, --model PATH                  Path to pre-trained model file
-  -o, --output {terminal,json,html} Output format (default: terminal)
-  -O, --output-file PATH            Write report to file instead of stdout
-  --timeout INT                     Session timeout in minutes (default: 30)
-  -v, --verbose                     Show feature vectors and heuristic rules
-  -j, --json-pretty                 Colored JSON for terminal reading
-  -w, --watch                       Continuously monitor log file
+  -f, --format {auto,nginx,json}     Log file format (default: auto-detect)
+  -t, --threshold FLOAT              Bot score threshold (default: 0.7)
+  -m, --model PATH                   Path to pre-trained model file
+  -o, --output {terminal,json,html,  Output format (default: terminal).
+      nginx,cloudflare}              nginx/cloudflare emit a firewall
+                                      rule for DANGER-scored IPs.
+  -O, --output-file PATH             Write report to file instead of stdout
+  --timeout INT                      Session timeout in minutes (default: 30)
+  -v, --verbose                      Show feature vectors and heuristic rules
+  -j, --json-pretty                  Colored JSON for terminal reading
+  -w, --watch                        Continuously monitor log file
 ```
 
 ### Probe Options

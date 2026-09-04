@@ -1,5 +1,32 @@
 # Changelog
 
+## [Unreleased] - 2026-09-04
+
+### Added
+- `--output nginx` / `--output cloudflare` on `microguard scan` — auto-generate
+  an nginx deny-list or Cloudflare Firewall Rule expression for DANGER-scored
+  (0.80-1.00) IPs, deduped and sorted, reusing the existing report formatter
+  pattern. Scan-only (not `probe`).
+
+### Fixed
+- Malformed or empty log files rendered as a fake "✅ HEALTHY, 0.0%" report
+  in terminal and HTML output instead of surfacing the parse failure — the
+  `error` field `scan_logfile()` sets was silently dropped by two of four
+  report formatters (`format_json`/`print_report` were unaffected). Also
+  fixed the HTML donut chart, which drew a solid danger-red ring for
+  zero-session data. Both `format_nginx_denylist`/`format_cloudflare_rule`
+  now inherit the same fix.
+- `_check_botnet_signatures`'s UA-rotation heuristic false-flagged every
+  1-3 request session as a bot — the scaled threshold
+  `min(10, request_count * 0.3)` drops below 1 for small sessions, so any
+  single-UA session (the normal case) trivially satisfied it.
+- `--output-file` to a missing/invalid directory crashed with a raw Python
+  traceback instead of a clean CLI error, across all three write sites
+  (scan, scan --verbose, probe).
+- Cleared all `ruff`/`mypy`/`vulture` findings (270 lint errors, 7 type
+  errors, 12 dead-code items) without changing behavior; added `mypy.ini`
+  and `microguard/vulture_whitelist.py`.
+
 ## [0.1.0] - 2026-09-04
 
 Initial release. Everything built in one session.

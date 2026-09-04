@@ -818,6 +818,9 @@ def _danger_ips(results: dict[str, Any]) -> list[str]:
 
 def format_nginx_denylist(results: dict[str, Any]) -> str:
     """Format DANGER-scored session IPs as an nginx deny-list include file."""
+    if results.get('error'):
+        return f"# microguard: {results['error']} — nothing to block\n"
+
     ips = _danger_ips(results)
     if not ips:
         return "# microguard: no sessions scored DANGER — nothing to block\n"
@@ -832,6 +835,9 @@ def format_nginx_denylist(results: dict[str, Any]) -> str:
 
 def format_cloudflare_rule(results: dict[str, Any]) -> str:
     """Format DANGER-scored session IPs as a Cloudflare Firewall Rule expression."""
+    if results.get('error'):
+        return f"# microguard: {results['error']} — nothing to block\n"
+
     ips = _danger_ips(results)
     if not ips:
         return "# microguard: no sessions scored DANGER — nothing to block\n"

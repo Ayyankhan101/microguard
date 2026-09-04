@@ -365,6 +365,17 @@ class TestFormatNginxDenylist:
         assert 'deny' not in output
         assert 'nothing to block' in output
 
+    def test_parse_error_surfaced_not_silently_empty(self):
+        # Regression: same bug class as ISSUE-001 — a malformed/empty log
+        # has zero sessions, which looks identical to "scanned fine, zero
+        # DANGER IPs" unless the parse error is surfaced. A user generating
+        # a blocklist from a broken log would otherwise see "nothing to
+        # block" and wrongly conclude their traffic is clean.
+        # Found by /qa on 2026-09-04
+        result = {'sessions': [], 'error': 'No valid log entries found'}
+        output = format_nginx_denylist(result)
+        assert 'No valid log entries found' in output
+
 
 class TestFormatCloudflareRule:
     """Tests for format_cloudflare_rule function."""
@@ -397,6 +408,14 @@ class TestFormatCloudflareRule:
         }
         output = format_cloudflare_rule(result)
         assert 'ip.src' not in output
+
+    def test_parse_error_surfaced_not_silently_empty(self):
+        # Regression: same bug class as ISSUE-001, see format_nginx_denylist
+        # test above.
+        # Found by /qa on 2026-09-04
+        result = {'sessions': [], 'error': 'No valid log entries found'}
+        output = format_cloudflare_rule(result)
+        assert 'No valid log entries found' in output
         assert 'nothing to block' in output
 
 

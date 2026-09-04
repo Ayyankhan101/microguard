@@ -26,6 +26,17 @@ DEFAULT_MODEL_PATH = os.path.join(
 )
 
 
+def _write_report(output_file: str, content: str) -> None:
+    """Write report content to a file, exiting cleanly (not a traceback) on failure."""
+    try:
+        with open(output_file, 'w', encoding='utf-8') as f:
+            f.write(content)
+    except OSError as e:
+        print(f"❌ Error: could not write to {output_file}: {e}", file=sys.stderr)
+        sys.exit(1)
+    print(f"📄 Report saved to {output_file}", file=sys.stderr)
+
+
 def scan_logfile(
     filepath: str,
     fmt: str = 'auto',
@@ -340,9 +351,7 @@ def main():
             from .report import format_verbose
             content = format_verbose(results)
             if args.output_file:
-                with open(args.output_file, 'w', encoding='utf-8') as f:
-                    f.write(content)
-                print(f"📄 Report saved to {args.output_file}", file=sys.stderr)
+                _write_report(args.output_file, content)
             else:
                 print(content)
         elif args.json_pretty:
@@ -367,9 +376,7 @@ def main():
             else:
                 content = format_terminal(results)
 
-            with open(args.output_file, 'w', encoding='utf-8') as f:
-                f.write(content)
-            print(f"📄 Report saved to {args.output_file}", file=sys.stderr)
+            _write_report(args.output_file, content)
         else:
             print_report(results, fmt=args.output)
         
@@ -417,9 +424,7 @@ def main():
             content = format_probe_report(results)
         
         if args.output_file:
-            with open(args.output_file, 'w', encoding='utf-8') as f:
-                f.write(content)
-            print(f"📄 Report saved to {args.output_file}", file=sys.stderr)
+            _write_report(args.output_file, content)
         else:
             print(content)
         

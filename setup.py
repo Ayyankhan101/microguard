@@ -11,6 +11,11 @@ setup(
     install_requires=[
         "micrograd",
     ],
+    extras_require={
+        "live": ["redis>=5.0,<6"],
+        "fastapi": ["fastapi>=0.110", "uvicorn>=0.29"],
+        "flask": ["flask>=3.0"],
+    },
     entry_points={
         "console_scripts": [
             "microguard=microguard.cli:main",

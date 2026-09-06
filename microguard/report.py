@@ -291,10 +291,11 @@ def format_json_pretty(results: dict[str, Any]) -> str:
         risk = score_label(score)
         
         comma = ',' if i < len(sorted_sessions) - 1 else ''
+        risk_json = f'"{risk}"'
         lines.append('  {')
         lines.append(f'    {_k("ip")}: {_s(s.get("ip", "?"))},')
         lines.append(f'    {_k("score")}: {_score_color(score)},')
-        lines.append(f'    {_k("risk")}: {_colorize(f"\"{risk}\"", score_label_color(score))},')
+        lines.append(f'    {_k("risk")}: {_colorize(risk_json, score_label_color(score))},')
         lines.append(f'    {_k("label")}: {_label_color(label)},')
         lines.append(f'    {_k("heuristic")}: {{')
         lines.append(f'      {_k("label")}: {_label_color(s.get("heuristic_label", "?"))},')

@@ -3,7 +3,6 @@
 from microguard.scanner import (
     ProbeResult,
     _analyze_probes,
-    _probe_features_to_vector,
     extract_probe_features,
     format_probe_verbose,
 )
@@ -187,29 +186,6 @@ class TestFormatProbeVerbose:
         }
         output = format_probe_verbose(result)
         assert 'bot signal' in output  # CV < 0.05
-
-
-class TestProbeFeaturesVector:
-    """Tests for _probe_features_to_vector."""
-
-    def test_vector_length(self):
-        features = {
-            'response_time': 0.5,
-            'ttfb': 0.3,
-            'timing_cv': 0.15,
-            'header_count': 0.5,
-            'has_accept_language': 1.0,
-            'body_entropy': 4.5,
-            'body_length': 0.01,
-            'status_code': 0.2,
-        }
-        vector = _probe_features_to_vector(features)
-        assert len(vector) == 19
-
-    def test_empty_features(self):
-        vector = _probe_features_to_vector({})
-        assert len(vector) == 19
-        assert all(v == 0.0 for v in vector)
 
 
 class TestExtractProbeFeatures:

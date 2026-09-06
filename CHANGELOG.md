@@ -1,14 +1,73 @@
 # Changelog
 
-## [Unreleased] - 2026-09-04
+## [Unreleased]
+
+## [2.0.0] - 2026-09-06
+
+v2.0 replaces the synthetic-only bot training data with real ground-truth
+attack traffic, fixes a real false-positive bug affecting GraphQL/SOAP/RPC/
+gRPC APIs, adds a real WebSocket probe, and corrects several claims in the
+tool's own output that didn't hold up (a live-probe "ML score" that wasn't
+a valid inference, a 95% accuracy number measured on the training set
+itself). Beta: see README's Known Limitations before production use.
 
 ### Added
-- `--output nginx` / `--output cloudflare` on `microguard scan` — auto-generate
-  an nginx deny-list or Cloudflare Firewall Rule expression for DANGER-scored
-  (0.80-1.00) IPs, deduped and sorted, reusing the existing report formatter
-  pattern. Scan-only (not `probe`).
+- **Real training data.** `training/groundtruth.py` + `training/build_real_dataset.py`
+  build the bot class from real, forensically ground-truth-labeled attack
+  traffic (`data/zenodo_data/organization-x/`: 213K real Apache log lines,
+  39 real attack-pattern rules — SQLi, RCE, directory scanning, brute-force
+  login, etc.) instead of `random.uniform()` synthetic data. Combined with
+  real Harvard human session data; synthetic data is now a capped top-up
+  for underrepresented attack subtypes only, not the bulk of the bot class.
+- **Held-out generalization eval.** `training/train.py::train_model` now
+  carves out a session-actor-level stratified split *before* training and
+  saves it as `data/eval_holdout.json`; `tests/test_training_quality.py::TestHeldOutAccuracy`
+  evaluates against it, including a recall check isolated to ground-truth
+  (not heuristic) labels specifically.
+- **Adversarial eval.** `data/adversarial_eval.json` + `TestAdversarialRobustness`
+  measure (don't gate on) recall against a synthetic browser-mimicking
+  stealthy-bot generator — an honest measurement of a known blind spot.
+- **WebSocket probe.** `microguard probe wss://...` — hand-rolled RFC 6455
+  handshake over stdlib `socket`/`ssl` (no new dependency), with its own
+  heuristic scorer, terminal/HTML formatters, and 15 tests against an
+  in-process echo server.
+- **Webhook / RPC-client allowlist.** Recognized senders (Stripe,
+  GitHub-Hookshot, Shopify, grpc-go/java/python/..., etc.) are labeled
+  `automated-integration` — automated by definition, not scored as a
+  security threat, excluded from bot-rate counts.
+- **`--output nginx` / `--output cloudflare`** on `microguard scan` —
+  auto-generate an nginx deny-list or Cloudflare Firewall Rule expression
+  for DANGER-scored (0.80-1.00) IPs, deduped and sorted. Scan-only.
+- **`status_code_entropy` feature** (replaces the permanently-hardcoded-0
+  `field_fill_speed`) — Shannon entropy of a session's HTTP status codes,
+  a real signal distinct from `error_rate`.
 
 ### Fixed
+- **GraphQL false positive:** `/graphql` was in `API_KEY_SCAN_PATTERNS`,
+  branding every legitimate GraphQL client a credential-scanning bot at
+  0.75 confidence. Removed.
+- **Single-endpoint API false positives:** GraphQL/SOAP/RPC paths are now
+  exempt from the "same endpoint = scraper" heuristics, at *both* the
+  heuristic-label layer and the score-blending layer in `cli.py` (a
+  heuristic fix alone didn't change the final classification — the model's
+  independent score could still override it; added a symmetric cap
+  mirroring the existing bot-confidence floor).
+- **gRPC uniform-timing false positive:** HTTP/2 multiplexing produces
+  near-uniform request timing for legitimate clients; the "uniform timing
+  = bot" rule now skips sessions with ≥3 distinct `/Service.Method` paths.
+- **`probe` no longer feeds live-probe data through the session-trained
+  MLP.** `_probe_features_to_vector` mapped unrelated response data into a
+  vector shaped for session-log features, then called `model.predict()` on
+  it — not a valid inference. Removed; probe scoring is now the heuristic
+  alone, and displayed output is relabeled "Automation Fingerprint" instead
+  of implying visitor bot/human classification.
+- **95% accuracy claim was circular:** it was measured on the model's own
+  training set. `TestModelAccuracy` is now explicitly documented as a
+  train-set fit sanity check; `TestHeldOutAccuracy` is the real number.
+- **Python version claim:** `setup.py`/CI claimed 3.8+ while the codebase
+  already used 3.10-only `X | Y` union syntax throughout (pre-existing,
+  not introduced this release). Bumped `python_requires` to `>=3.10` and
+  dropped the 3.8/3.9 CI legs to match reality.
 - Malformed or empty log files rendered as a fake "✅ HEALTHY, 0.0%" report
   in terminal and HTML output instead of surfacing the parse failure — the
   `error` field `scan_logfile()` sets was silently dropped by two of four

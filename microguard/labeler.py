@@ -54,7 +54,7 @@ API_KEY_SCAN_PATTERNS = [
     r'/api/.*key', r'/api/.*token', r'/api/.*auth', r'/api/.*login',
     r'/oauth2?/', r'/jwt/', r'/token', r'/authenticate',
     r'/signup', r'/register', r'/forgot-password',
-    r'/graphql', r'/_debug',
+    r'/_debug',
 ]
 API_KEY_SCAN_RE = re.compile('|'.join(API_KEY_SCAN_PATTERNS), re.IGNORECASE)
 
@@ -88,6 +88,38 @@ ATTACK_TOOL_UA_PATTERNS = [
     r'Go\s*net/http',  # Go HTTP client (common in attack tools)
 ]
 ATTACK_TOOL_RE = re.compile('|'.join(ATTACK_TOOL_UA_PATTERNS), re.IGNORECASE)
+
+
+# --- Single-endpoint API detection ---
+# GraphQL, SOAP, and RPC-style APIs route every call through one path by
+# design. "All requests hit the same endpoint" is a scraper signal for
+# REST-style, path-per-resource APIs — it's just how these APIs work, and
+# flagging it would brand every legitimate client as a bot.
+SINGLE_ENDPOINT_API_PATTERNS = [
+    r'/graphql', r'/graphiql', r'/trpc/', r'/rpc\b', r'/soap',
+    r'/services/', r'\.asmx', r'/ws\b',
+]
+SINGLE_ENDPOINT_API_RE = re.compile('|'.join(SINGLE_ENDPOINT_API_PATTERNS), re.IGNORECASE)
+
+# gRPC calls are routed as POST /package.Service/Method — two path segments,
+# method name capitalized by convention, no file extension.
+GRPC_PATH_RE = re.compile(r'^/[\w.]+/[A-Z]\w*$')
+
+# --- Known automated clients: webhooks + RPC/gRPC client libraries ---
+# Neither has a human operator by definition — a webhook sender and a gRPC
+# service client are both expected, legitimate automation, not a "bot" in
+# the threat sense. Recognized senders get a distinct label instead of
+# being scored as malicious or dinged by the generic "unknown UA" rule.
+KNOWN_AUTOMATED_CLIENT_PATTERNS = [
+    # Webhook / server-to-server integrations
+    r'Stripe/\d', r'GitHub-Hookshot', r'Shopify', r'Slackbot-LinkExpanding',
+    r'Slack-Webhooks', r'PayPal-IPN', r'Twilio', r'svix-webhooks',
+    r'WhatsApp/', r'Zapier', r'HubSpot', r'Mailgun',
+    # gRPC client library user agents (grpc-<lang>/<version>)
+    r'grpc-go', r'grpc-java', r'grpc-python', r'grpc-node',
+    r'grpc-c/', r'grpc-c\+\+', r'grpc-swift', r'grpc-dotnet', r'grpc-objc',
+]
+KNOWN_AUTOMATED_CLIENT_RE = re.compile('|'.join(KNOWN_AUTOMATED_CLIENT_PATTERNS), re.IGNORECASE)
 
 
 def _check_cloudflare_signals(session: Session) -> tuple[bool, str]:
@@ -187,11 +219,13 @@ def _check_botnet_signatures(session: Session) -> tuple[bool, str]:
 
 
 def label_session(session: Session) -> tuple[str, float, str]:
-    """Label a session as 'bot' or 'human' with confidence.
-    
+    """Label a session as 'bot', 'human', or 'automated-integration' with confidence.
+
     Returns:
         (label, confidence, reason)
-        label: 'bot' or 'human'
+        label: 'bot', 'human', or 'automated-integration' (recognized
+               webhook/server-to-server senders — automated by definition,
+               but not a security threat, so kept distinct from 'bot')
         confidence: 0.0 to 1.0
         reason: human-readable explanation
     """
@@ -201,9 +235,17 @@ def label_session(session: Session) -> tuple[str, float, str]:
     entries = session.requests
     ua = session.user_agent.lower()
     urls = [e.url.split('?')[0] for e in entries]
-    
+
+    # === KNOWN AUTOMATED INTEGRATIONS (not a threat signal) ===
+
+    # 0. Recognized webhook/integration sender — automated by definition,
+    # but not a security threat. Checked first so it isn't caught by the
+    # broader bot-signal rules below.
+    if KNOWN_AUTOMATED_CLIENT_RE.search(ua):
+        return 'automated-integration', 0.90, f'known automated client (webhook/RPC): {session.user_agent[:50]}'
+
     # === HIGH CONFIDENCE BOT SIGNALS (0.90-0.99) ===
-    
+
     # 1. Known bot/monitoring user agent
     if HIGH_CONF_BOT_RE.search(ua):
         return 'bot', 0.95, f'known bot/monitoring UA: {session.user_agent[:50]}'
@@ -224,8 +266,12 @@ def label_session(session: Session) -> tuple[str, float, str]:
             avg_gap = sum(gaps) / len(gaps)
             max_gap = max(gaps)
             min_gap = min(gaps)
-            # All gaps nearly identical = bot
-            if avg_gap > 0 and (max_gap - min_gap) / avg_gap < 0.05:
+            # All gaps nearly identical = bot — unless this looks like
+            # multiplexed gRPC traffic (many distinct /Service/Method paths
+            # pipelined over one HTTP/2 connection), where uniform timing is
+            # expected from real clients, not a bot signal.
+            grpc_like = len({u for u in urls if GRPC_PATH_RE.match(u)}) >= 3
+            if avg_gap > 0 and (max_gap - min_gap) / avg_gap < 0.05 and not grpc_like:
                 return 'bot', 0.90, f'uniform timing (avg {avg_gap:.3f}s, near-zero variance)'
     
     # 4. HTTP/1.0 only (no modern browser uses this)
@@ -252,9 +298,11 @@ def label_session(session: Session) -> tuple[str, float, str]:
     if session.request_count > 100:
         return 'bot', 0.85, f'extremely high request count: {session.request_count}'
     
-    # 6. All requests to same endpoint (scraper pattern)
+    # 6. All requests to same endpoint (scraper pattern) — not for
+    # single-endpoint APIs (GraphQL/SOAP/RPC), where this is normal.
     unique_urls = set(urls)
-    if len(unique_urls) == 1 and session.request_count > 10:
+    if (len(unique_urls) == 1 and session.request_count > 10
+            and not SINGLE_ENDPOINT_API_RE.search(urls[0])):
         return 'bot', 0.80, f'all {session.request_count} requests to same endpoint: {urls[0]}'
     
     # 7. High request rate (>50 req/min sustained)
@@ -273,11 +321,13 @@ def label_session(session: Session) -> tuple[str, float, str]:
     if errors / len(entries) > 0.5 and session.request_count > 10:
         return 'bot', 0.70, f'high error rate: {errors}/{len(entries)} failed requests'
     
-    # 10. Repeated same endpoint with different parameters (API abuse)
+    # 10. Repeated same endpoint with different parameters (API abuse) —
+    # not for single-endpoint APIs, same exemption as rule 6.
     from collections import Counter
     path_counts = Counter(urls)
-    most_common_count = path_counts.most_common(1)[0][1] if path_counts else 0
-    if most_common_count > 20 and most_common_count / len(entries) > 0.7:
+    most_common_path, most_common_count = path_counts.most_common(1)[0] if path_counts else ('', 0)
+    if (most_common_count > 20 and most_common_count / len(entries) > 0.7
+            and not SINGLE_ENDPOINT_API_RE.search(most_common_path)):
         return 'bot', 0.70, f'repeated endpoint hit {most_common_count} times'
     
     # 11. API key scanning / credential brute-force

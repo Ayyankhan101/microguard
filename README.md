@@ -1,8 +1,12 @@
 # 🔍 Microguard
 
-**Bot Traffic Audit Tool powered by micrograd**
+**Bot Traffic Audit Tool powered by micrograd** · v2.0.0-beta
 
 Detect malicious bot traffic in your API logs and live endpoints. Zero external dependencies beyond micrograd.
+
+> **Beta:** trained on real ground-truth attack data (not synthetic), but not
+> yet adversarially tested. See [Known Limitations](#known-limitations-read-before-relying-on-this-for-production-blocking)
+> before using this as a production blocking gate.
 
 ```
 $ microguard scan access.log
@@ -26,15 +30,17 @@ $ microguard scan access.log
 
 ## Features
 
-- **19 HTTP-level features** for bot detection (timing, behavioral, header analysis)
-- **24 heuristic rules** across 4 confidence tiers (Cloudflare WAF, API key, botnet detection)
-- **micrograd neural network** — 85 parameters, ~1.8KB model size
-- **Live URL probing** — test endpoints directly, not just log files
+- **19 HTTP-level features** for bot detection (timing, behavioral, header analysis) from real access logs — REST-style, path-per-resource traffic
+- **Single-endpoint API aware** — GraphQL, SOAP, RPC, and gRPC traffic is exempted from the "same endpoint = scraper" heuristics that would otherwise flag every legitimate client of a single-endpoint API
+- **Webhook/integration allowlist** — recognized senders (Stripe, GitHub, Shopify, ...) are labeled `automated-integration`, not scored as malicious bots
+- **24+ heuristic rules** across 4 confidence tiers (Cloudflare WAF, API key, botnet detection)
+- **micrograd neural network** — 85 parameters, ~1.8KB model size, trained on real ground-truth-labeled attack traffic + real human sessions (see [Model Training](#model-architecture))
+- **Live URL probing** — fingerprints how automated/hardened an HTTP or WebSocket endpoint looks from a single probe. This is *not* visitor classification (it scores the tool's own request against the target, not third-party traffic) — use `scan` against access logs for that
 - **Continuous monitoring** — watch mode tails log files in real time
 - **Multiple output formats** — terminal, JSON, colored JSON, and HTML reports
 - **Auto-generated firewall rules** — nginx deny-list or Cloudflare Firewall Rule expression for DANGER-scored IPs
 - **Score interpretation** — SAFE / LOW / WARNING / DANGER risk labels
-- **Zero external dependencies** — only requires micrograd
+- **Zero external dependencies** — only requires micrograd (the WebSocket probe hand-rolls the RFC 6455 handshake over stdlib `socket`/`ssl` rather than pulling in a client library)
 
 ## Installation
 
@@ -52,7 +58,7 @@ pip install .
 
 ### Requirements
 
-- Python 3.8+
+- Python 3.10+ (the codebase uses `X | Y` union type hints throughout)
 - [micrograd](https://github.com/karpathy/micrograd) (installed automatically)
 
 ## Quick Start
@@ -112,8 +118,14 @@ message instead of an empty rule when no session scores DANGER.
 
 ### Probe a Live URL
 
+`probe` fingerprints how automated/hardened a *target* looks from a single
+live request — it does not classify third-party visitors (it can't: it's
+this tool making the request and reading the response, not observing who
+else calls the endpoint). Use `scan` against access logs to classify real
+visitor traffic.
+
 ```bash
-# Single probe
+# Single HTTP(S) probe
 microguard probe https://example.com
 
 # Multiple probes for timing analysis
@@ -127,6 +139,9 @@ microguard probe https://example.com --output html --output-file probe.html
 
 # Custom User-Agent
 microguard probe https://example.com --user-agent "MyBot/1.0"
+
+# WebSocket handshake + one-frame probe (ws:// or wss://)
+microguard probe wss://example.com/socket
 ```
 
 ### Continuous Monitoring
@@ -147,6 +162,11 @@ microguard scan access.log --watch --threshold 0.5
 | 0.31 - 0.59 | **LOW** | Minor signals, likely human |
 | 0.60 - 0.79 | **WARNING** | Suspicious, investigate |
 | 0.80 - 1.00 | **DANGER** | High confidence bot traffic |
+
+Sessions from a recognized webhook/integration sender (Stripe, GitHub,
+Shopify, ...) get a separate `automated-integration` label instead of a
+score — they're automated by definition, not a security threat, so they're
+excluded from bot-rate counts entirely rather than forced into bot/human.
 
 ## CLI Reference
 
@@ -335,6 +355,33 @@ graph LR
 | Model size | ~1.8KB |
 | Inference time | < 0.5ms per request |
 
+### Model Training
+
+The bot class is trained on **real, ground-truth-labeled attack traffic**,
+not synthetic data: `microguard/training/build_real_dataset.py` extracts
+sessions from a real production Apache log (`data/zenodo_data/organization-x/`)
+and labels them using that dataset's own forensic ground-truth rules (SQL
+injection, RCE, directory scanning, brute-force login, etc. — see
+`microguard/training/groundtruth.py`), falls back to the heuristic labeler
+for the rest of that real traffic, and uses real human session timing data
+from the Harvard Dataverse dataset for the human class. A capped, clearly-
+tagged synthetic top-up fills in attack subtypes underrepresented in the
+real data. Retrain with:
+
+```bash
+python -m microguard.training.build_real_dataset   # builds data/real_bot_training_data.json
+python -m microguard.training.train                # trains + writes data/eval_holdout.json
+```
+
+Accuracy is reported two ways — `tests/test_training_quality.py::TestModelAccuracy`
+is a train-set fit sanity check (expect it to look near-perfect; that's not
+a generalization claim), while `TestHeldOutAccuracy` evaluates the model on
+sessions carved out *before* training even started, split so no single
+actor's sessions appear on both sides — including a recall check isolated
+to the organization-x forensic ground-truth labels specifically, since
+that's the one label source in this dataset that's fully independent of
+the model's own input features.
+
 ## File Structure
 
 ```
@@ -346,37 +393,45 @@ microguard/
 ├── microguard/
 │   ├── __init__.py             # Package exports
 │   ├── cli.py                  # CLI entry point (scan, probe, watch, info)
-│   ├── parser.py               # Nginx + JSON log parsers
+│   ├── parser.py               # Nginx + JSON log parsers (transparent .gz support)
 │   ├── features.py             # 19 feature extractors
-│   ├── labeler.py              # 24 heuristic bot/human rules
+│   ├── labeler.py              # 24+ heuristic bot/human/automated-integration rules
 │   ├── model.py                # micrograd MLP wrapper (85 params)
-│   ├── scanner.py              # HTTP scanner for live probing
+│   ├── scanner.py              # HTTP + WebSocket live probing (automation fingerprint)
 │   ├── watch.py                # Continuous log monitoring
 │   ├── report.py               # Terminal + JSON + HTML + Verbose output
 │   └── training/
-│       ├── train.py            # Model training script
-│       └── generate.py         # Synthetic data generation
-├── tests/                      # 142 tests
-│   ├── test_parser.py          # 16 tests
+│       ├── train.py            # Model training + held-out split/eval
+│       ├── generate.py         # Synthetic bot/human data (top-up only)
+│       ├── groundtruth.py      # organization-x forensic rule matcher
+│       └── build_real_dataset.py  # Builds the real (+capped synthetic) training set
+├── tests/                      # 223 tests
+│   ├── test_parser.py          # 19 tests
 │   ├── test_features.py        # 21 tests
 │   ├── test_labeler.py         # 7 tests
-│   ├── test_labeler_rules.py   # 18 tests (Cloudflare, API key, botnet)
+│   ├── test_labeler_rules.py   # 19 tests (Cloudflare, API key, botnet, single-endpoint APIs)
 │   ├── test_model.py           # 7 tests
 │   ├── test_scanner.py         # 16 tests
-│   ├── test_scanner_extended.py # 16 tests
-│   ├── test_report.py          # 27 tests
+│   ├── test_scanner_extended.py # 13 tests
+│   ├── test_scanner_ws.py      # 15 tests (WebSocket probe + RFC 6455 framing)
+│   ├── test_groundtruth.py     # 16 tests
+│   ├── test_training_quality.py # 37 tests (train-set fit + held-out generalization)
+│   ├── test_report.py          # 45 tests
 │   └── test_watch.py           # 8 tests
 └── data/
-    ├── model.json              # Pre-trained model weights (1.8KB)
-    ├── normalization.json      # Feature normalization params
-    ├── training_data.json      # Training dataset
-    └── sample_access.log       # Example log file (auto-scanned on first run)
+    ├── model.json                    # Pre-trained model weights (1.8KB)
+    ├── normalization.json            # Feature normalization params
+    ├── eval_holdout.json             # Held-out generalization eval set (never trained on)
+    ├── real_bot_training_data.json   # Real ground-truth + heuristic + capped synthetic bot data
+    ├── harvard_training_data.json    # Real human session timing data
+    ├── zenodo_data/organization-x/   # Real Apache logs + forensic ground-truth rules
+    └── sample_access.log             # Example log file (auto-scanned on first run)
 ```
 
 ## Testing
 
 ```bash
-# Run all tests (142 tests)
+# Run all tests (223 tests)
 python -m pytest tests/
 
 # Run with verbose output
@@ -389,7 +444,7 @@ python -m pytest tests/test_features.py
 python -m pytest tests/test_labeler_rules.py tests/test_report.py tests/test_watch.py
 ```
 
-**Test coverage:** 142 tests (all passing)
+**Test coverage:** 223 tests (all passing)
 
 ## CI/CD
 
@@ -398,6 +453,44 @@ GitHub Actions workflow runs on every push and PR:
 - **Matrix:** 3 OS (ubuntu, macOS, Windows) × 6 Python versions (3.8–3.13)
 - **Steps:** Install → pytest → CLI smoke test
 - **Config:** `.github/workflows/test.yml`
+
+## Known Limitations (read before relying on this for production blocking)
+
+This is a v2.0 beta: the architecture is real and the detection is trained
+on real data, but it has not been adversarially tested. Specifically:
+
+- **No evidence against sophisticated bots.** All real bot/attack traffic in
+  training and eval (`data/zenodo_data/organization-x/`) is fairly overt —
+  monitoring bots, scanners, forensic attack patterns. `tests/.../TestAdversarialRobustness`
+  and `data/adversarial_eval.json` measure recall against a synthetic
+  browser-mimicking bot, but treat that number with real skepticism (see
+  next point) — it is not proof the model catches real evasive bots.
+- **The real-human baseline has low feature diversity.** Of the 19 model
+  features, only 9 (timing + request-count based) vary across
+  `data/harvard_training_data.json`'s "real" human rows; the other 10
+  (`header_consistency_score`, `payload_entropy`, `status_code_entropy`,
+  `ua_category`, etc.) are constant placeholder values, not genuine
+  per-session variation. This makes bot/human separation easier to achieve
+  in testing than it would be against fully-realistic diverse human
+  traffic — a material caveat on every accuracy number in this README.
+- **gRPC and webhook traffic are labeled `automated-integration`, not
+  bot/human.** Correct in spirit (neither has a human operator), but it
+  means microguard doesn't attempt bot-vs-human classification for those
+  protocols at all — by design, not oversight.
+- **`probe` fingerprints a target, it doesn't classify visitors.** Live
+  HTTP/WebSocket probing scores how automated/hardened the *target* looks
+  from this tool's own request — it cannot see or classify third-party
+  traffic. Only `scan` (against real access logs) does that.
+- **Default `--threshold 0.7` is validated, not scientifically optimal.**
+  On held-out real data, the model's own raw score clusters narrowly
+  (~0.35–0.73) — the heuristic layer's floor/cap does most of the
+  decisive work near that boundary. Validate against your own traffic
+  before using this as an automated blocking gate.
+- **GraphQL/SOAP endpoint differentiation only works for GET+query-param
+  patterns.** Standard access logs never capture a POST body, so most real
+  GraphQL/SOAP traffic (POST, JSON/XML body) can't be operation-differentiated
+  from logs alone — the single-endpoint-path exemption is the real fix for
+  those, not per-operation tracking.
 
 ## Contributing
 
@@ -417,6 +510,7 @@ MIT License - see [LICENSE](LICENSE) for details.
 - [micrograd](https://github.com/karpathy/micrograd) — The tiny autograd engine that makes this possible
 - [Nescio98](https://github.com/Nescio98/Machine-Learning-Model-for-Bot-Detection) — Research on HTTP-level bot detection features
 - [Harvard Dataverse](https://dataverse.harvard.edu/) — Web server access log datasets
+- Organization X (Zenodo) — Real, ground-truth-labeled Apache attack-traffic dataset used to train the bot class on genuine forensic labels instead of synthetic data
 
 ---
 

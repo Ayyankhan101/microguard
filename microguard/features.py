@@ -40,8 +40,9 @@ BOT_UA_RE = re.compile('|'.join(BOT_UA_PATTERNS), re.IGNORECASE)
 BROWSER_UA_RE = re.compile('|'.join(KNOWN_BROWSER_UA), re.IGNORECASE)
 
 
-def _shannon_entropy(data: str) -> float:
-    """Calculate Shannon entropy of a string."""
+def _shannon_entropy(data: str | list[int]) -> float:
+    """Calculate Shannon entropy of a sequence of discrete values (a
+    string's characters, or e.g. a session's list of HTTP status codes)."""
     if not data:
         return 0.0
     
@@ -121,37 +122,51 @@ class Session:
 
 def group_into_sessions(
     entries: list[LogEntry],
-    timeout_minutes: int = 30
+    timeout_minutes: int = 30,
+    session_key=None,
 ) -> list[Session]:
-    """Group log entries into sessions by IP.
-    
+    """Group log entries into sessions by actor.
+
     A new session starts when:
-    - A new IP appears
+    - A new actor appears (by default, a new IP)
     - More than timeout_minutes pass between requests
+
+    Args:
+        entries: Parsed log entries
+        timeout_minutes: Session gap timeout
+        session_key: Optional `Callable[[LogEntry], Hashable]` identifying
+            the actor a request belongs to. Defaults to `lambda e: e.ip`.
+            Training pipelines built from datasets where the IP field is
+            degenerate (e.g. anonymized to one or two placeholder values)
+            can pass `lambda e: (e.ip, e.user_agent)` instead, so distinct
+            clients aren't collapsed into one giant session.
     """
+    if session_key is None:
+        session_key = lambda e: e.ip
+
     all_sessions: list[Session] = []
-    last_session_by_ip: dict[str, Session] = {}
-    
+    last_session_by_key: dict = {}
+
     for entry in sorted(entries, key=lambda e: e.timestamp):
-        ip = entry.ip
-        
-        if ip in last_session_by_ip:
-            session = last_session_by_ip[ip]
+        key = session_key(entry)
+
+        if key in last_session_by_key:
+            session = last_session_by_key[key]
             # Check timeout
             if session.end_time:
                 gap = (entry.timestamp - session.end_time).total_seconds()
                 if gap > timeout_minutes * 60:
-                    # New session for this IP
-                    session = Session(ip, entry.user_agent)
+                    # New session for this actor
+                    session = Session(entry.ip, entry.user_agent)
                     all_sessions.append(session)
-                    last_session_by_ip[ip] = session
+                    last_session_by_key[key] = session
             session.add_request(entry)
         else:
-            session = Session(ip, entry.user_agent)
+            session = Session(entry.ip, entry.user_agent)
             session.add_request(entry)
             all_sessions.append(session)
-            last_session_by_ip[ip] = session
-    
+            last_session_by_key[key] = session
+
     return all_sessions
 
 
@@ -252,14 +267,17 @@ def extract_features(session: Session) -> list[float]:
     else:
         ua_category = 2.0
     
-    # === PAYLOAD FEATURES (13-14) ===
-    
+    # === PAYLOAD / RESPONSE FEATURES (13-14) ===
+
     # 13. payload_entropy (average entropy of request URLs)
     url_entropies = [_shannon_entropy(url) for url in urls]
     avg_payload_entropy = sum(url_entropies) / len(url_entropies) if url_entropies else 0.0
     
-    # 14. field_fill_speed (NOT AVAILABLE IN LOGS — pad to 0)
-    field_fill_speed = 0.0
+    # 14. status_code_entropy (Shannon entropy of the session's HTTP status
+    # codes — distinct from error_rate: a session that's 100% 404 has a
+    # HIGH error rate but LOW entropy (uniform), while a scanner mixing
+    # 200/301/403/404/500 has both high error rate and high entropy).
+    status_code_entropy = _shannon_entropy([e.status for e in entries])
     
     # === CONTEXT FEATURE (15) ===
     
@@ -316,7 +334,7 @@ def extract_features(session: Session) -> list[float]:
         
         # Payload (13-14)
         avg_payload_entropy,        # 13. payload_entropy
-        field_fill_speed,           # 14. field_fill_speed (N/A in logs)
+        status_code_entropy,        # 14. status_code_entropy
         
         # Context (15)
         float(same_endpoint_hits),  # 15. same_endpoint_hits
@@ -344,7 +362,7 @@ FEATURE_NAMES = [
     'has_accept_language',
     'ua_category',
     'payload_entropy',
-    'field_fill_speed',
+    'status_code_entropy',
     'same_endpoint_hits',
     'error_rate',
     'image_ratio',

@@ -16,6 +16,7 @@ from microguard.features import extract_features, group_into_sessions
 from microguard.labeler import label_session
 from microguard.model import BotDetector
 from microguard.parser import LogEntry, parse_file
+from microguard.training.generate import generate_stealthy_bot_session
 
 
 def prepare_training_data(
@@ -96,33 +97,99 @@ def normalize_features(
     return normalized
 
 
+def split_holdout(
+    features: list[list[float]],
+    labels: list[float],
+    group_ids: list[str],
+    test_frac: float = 0.2,
+    seed: int = 42,
+) -> tuple[list[int], list[int]]:
+    """Session-group-level stratified train/held-out split.
+
+    Splits by group_id (not row), so no single actor's session(s) can
+    appear on both sides, then stratifies by label so both splits contain
+    both classes. Returns (train_indices, test_indices).
+    """
+    rng = random.Random(seed)
+
+    group_label: dict[str, float] = {}
+    group_rows: dict[str, list[int]] = {}
+    for i, (gid, label) in enumerate(zip(group_ids, labels)):
+        group_label.setdefault(gid, label)
+        group_rows.setdefault(gid, []).append(i)
+
+    bot_groups = [g for g, lbl in group_label.items() if lbl > 0.5]
+    human_groups = [g for g, lbl in group_label.items() if lbl <= 0.5]
+    rng.shuffle(bot_groups)
+    rng.shuffle(human_groups)
+
+    def _split(groups: list[str]) -> tuple[list[str], list[str]]:
+        if not groups:
+            return [], []
+        n_test = max(1, int(len(groups) * test_frac))
+        return groups[n_test:], groups[:n_test]
+
+    bot_train, bot_test = _split(bot_groups)
+    human_train, human_test = _split(human_groups)
+
+    train_idx = [i for g in bot_train + human_train for i in group_rows[g]]
+    test_idx = [i for g in bot_test + human_test for i in group_rows[g]]
+    return train_idx, test_idx
+
+
 def train_model(
     features: list[list[float]],
     labels: list[float],
     model_path: str = "data/model.json",
     epochs: int = 100,
     learning_rate: float = 0.05,
+    group_ids: list[str] | None = None,
+    provenance: list[str] | None = None,
+    holdout_frac: float = 0.2,
 ) -> BotDetector:
     """Train the bot detection model with normalization.
-    
+
     Computes normalization from training data, normalizes features,
     saves normalization.json alongside model.json.
-    
+
     Args:
         features: List of feature vectors
         labels: List of labels (0.0=human, 1.0=bot)
         model_path: Path to save trained model
         epochs: Number of training epochs
         learning_rate: Learning rate
-    
+        group_ids: Optional per-row actor/session identifiers. When given,
+            a session-group-level stratified split is carved out BEFORE
+            normalization or training and saved as eval_holdout.json next
+            to the model — an honest, never-seen generalization check,
+            not an in-sample accuracy number.
+        holdout_frac: Fraction of groups (per class) held out for eval.
+
     Returns:
         Trained BotDetector
     """
+    holdout_features: list[list[float]] | None = None
+    holdout_labels: list[float] | None = None
+    holdout_provenance: list[str] | None = None
+
+    if group_ids is not None:
+        train_idx, test_idx = split_holdout(features, labels, group_ids, test_frac=holdout_frac)
+        holdout_features = [features[i] for i in test_idx]
+        holdout_labels = [labels[i] for i in test_idx]
+        if provenance is not None:
+            holdout_provenance = [provenance[i] for i in test_idx]
+        features = [features[i] for i in train_idx]
+        labels = [labels[i] for i in train_idx]
+        print(
+            f"\n🔒 Held-out split: {len(holdout_features)} test / {len(features)} train "
+            "sessions (group-level, stratified — no actor appears in both)"
+        )
+
     print("\n🧠 Training model...")
     print(f"   Samples: {len(features)}")
     print(f"   Bot: {sum(labels):.0f} | Human: {len(labels) - sum(labels):.0f}")
     print(f"   Epochs: {epochs} | LR: {learning_rate}")
-    
+
     # Compute normalization from training data
     mins, maxs = compute_normalization(features)
     
@@ -198,17 +265,145 @@ def train_model(
     if tp + fn > 0:
         recall = tp / (tp + fn)
         print(f"   Recall: {recall:.1%}")
-    
+
+    # Held-out evaluation — the only honest generalization number. The
+    # "Final Evaluation" above is train-set fit and will always look
+    # better than this; that's expected, not a bug.
+    if holdout_features is not None and holdout_labels is not None:
+        holdout_path = os.path.join(os.path.dirname(model_path) or '.', 'eval_holdout.json')
+        n_bot_h = sum(1 for lbl in holdout_labels if lbl > 0.5)
+        with open(holdout_path, 'w') as f:
+            json.dump({
+                'features': holdout_features,
+                'labels': holdout_labels,
+                'provenance': holdout_provenance,
+                'n_samples': len(holdout_labels),
+                'n_features': len(holdout_features[0]) if holdout_features else 0,
+                'n_human': len(holdout_labels) - n_bot_h,
+                'n_bot': n_bot_h,
+            }, f, indent=2)
+        print(f"\n💾 Held-out eval set saved to: {holdout_path}")
+
+        print("\n📊 Held-Out Evaluation (never seen during training):")
+        h_preds = model.predict_batch(holdout_features)
+        h_correct = sum(
+            1 for p, lbl in zip(h_preds, holdout_labels) if (p > 0.5) == (lbl > 0.5)
+        )
+        h_acc = h_correct / len(holdout_labels) if holdout_labels else 0.0
+        h_tp = sum(1 for p, lbl in zip(h_preds, holdout_labels) if p > 0.5 and lbl > 0.5)
+        h_tn = sum(1 for p, lbl in zip(h_preds, holdout_labels) if p <= 0.5 and lbl <= 0.5)
+        h_fp = sum(1 for p, lbl in zip(h_preds, holdout_labels) if p > 0.5 and lbl <= 0.5)
+        h_fn = sum(1 for p, lbl in zip(h_preds, holdout_labels) if p <= 0.5 and lbl > 0.5)
+        print(f"   Accuracy: {h_acc:.1%}")
+        print(f"   True Positives:  {h_tp}")
+        print(f"   True Negatives:  {h_tn}")
+        print(f"   False Positives: {h_fp}")
+        print(f"   False Negatives: {h_fn}")
+        if h_tp + h_fp > 0:
+            print(f"   Precision: {h_tp / (h_tp + h_fp):.1%}")
+        if h_tp + h_fn > 0:
+            print(f"   Recall: {h_tp / (h_tp + h_fn):.1%}")
+
+        # Breakdown by label provenance. This matters because
+        # 'heuristic_real' bot labels come from the SAME rule-based logic
+        # that some of the 19 model features also encode (e.g. a known-bot
+        # user agent drives both the `ua_category` feature AND the
+        # heuristic label) — recall on that subset is somewhat circular.
+        # 'ground_truth' labels (real forensic attack-pattern matches:
+        # SQLi, RCE, path traversal, ...) are an independent signal the
+        # model was never told directly, so recall there is the honest
+        # generalization number.
+        if holdout_provenance is not None:
+            print("\n   By label source (bot rows only):")
+            sources = sorted(set(holdout_provenance))
+            for source in sources:
+                idx = [i for i, p in enumerate(holdout_provenance) if p == source]
+                bot_idx = [i for i in idx if holdout_labels[i] > 0.5]
+                if not bot_idx:
+                    continue
+                detected = sum(1 for i in bot_idx if h_preds[i] > 0.5)
+                print(f"     {source:<20} recall: {detected}/{len(bot_idx)} ({detected / len(bot_idx):.1%})")
+
+        # Adversarial eval — a known, honestly-measured blind spot, not a
+        # pass/fail gate. `generate_stealthy_bot_session()` is SYNTHETIC: a
+        # bot that spoofs a browser UA, randomizes its own timing, and
+        # browses multiple pages specifically to evade the same heuristics
+        # everything else in this file is scored against. It's never
+        # trained on (a generator this close to the human distribution
+        # would just teach the model an arbitrary synthetic boundary, not
+        # anything real) — only used here to measure how the trained model
+        # handles bots that deliberately don't look like the training
+        # data's bots. Expect this number to be much lower than the
+        # held-out numbers above; that's the honest point of running it.
+        real_human_holdout = [f for f, lbl in zip(holdout_features, holdout_labels) if lbl <= 0.5]
+        if real_human_holdout:
+            n_adv = min(200, len(real_human_holdout))
+            adv_bot_features = [generate_stealthy_bot_session() for _ in range(n_adv)]
+            adv_human_features = real_human_holdout[:n_adv]
+            adv_features = adv_bot_features + adv_human_features
+            adv_labels = [1.0] * len(adv_bot_features) + [0.0] * len(adv_human_features)
+
+            adv_path = os.path.join(os.path.dirname(model_path) or '.', 'adversarial_eval.json')
+            with open(adv_path, 'w') as f:
+                json.dump({
+                    'features': adv_features,
+                    'labels': adv_labels,
+                    'n_samples': len(adv_features),
+                    'n_bot': len(adv_bot_features),
+                    'n_human': len(adv_human_features),
+                    'note': (
+                        'Bot rows are synthetic stealthy-bot vectors '
+                        '(generate_stealthy_bot_session), never trained on. '
+                        'Human rows are real, from the held-out eval set — '
+                        'but caveat: 10 of 19 feature dimensions in the '
+                        'Harvard human data (endpoint_sequence_entropy, '
+                        'header_consistency_score, payload_entropy, '
+                        'status_code_entropy, ua_category, and others — see '
+                        'README Known Limitations) are constant placeholder '
+                        'values, not per-session real variation, so this '
+                        'result is easier to achieve than it would be '
+                        'against fully-realistic diverse human traffic. '
+                        'Measures a known blind spot; a high number here is '
+                        'NOT strong evidence of adversarial robustness.'
+                    ),
+                }, f, indent=2)
+
+            adv_preds = model.predict_batch(adv_features)
+            adv_bot_preds = adv_preds[:len(adv_bot_features)]
+            adv_recall = sum(1 for p in adv_bot_preds if p > 0.5) / len(adv_bot_preds)
+            print(f"\n⚠️  Adversarial eval saved to: {adv_path}")
+            print(f"   Stealthy-bot recall: {adv_recall:.1%} (see file's 'note' — this is an easier")
+            print("   test than real diverse human traffic would be; not proof of robustness)")
+
     return model
 
 
 def main():
     """Main training entry point."""
     data_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), 'data')
-    
+
+    group_ids = None
+    provenance = None
+
+    # Priority 0: real bot-training data — real ground-truth-labeled attack
+    # traffic (organization-x) + real Harvard human sessions, with a
+    # capped synthetic top-up for underrepresented attack categories. Built
+    # by `microguard.training.build_real_dataset`. Preferred over Harvard
+    # alone because its bot class is real, not synthetic.
+    real_bot_path = os.path.join(data_dir, 'real_bot_training_data.json')
+    if os.path.exists(real_bot_path):
+        print(f"📂 Loading real bot-training data from: {real_bot_path}")
+        with open(real_bot_path) as f:
+            data = json.load(f)
+        features = data['features']
+        labels = data['labels']
+        group_ids = data.get('group_ids')
+        provenance = data.get('provenance')
+        print(f"   Samples: {len(features)} (Human: {data.get('n_human', '?')}, Bot: {data.get('n_bot', '?')})")
+        print(f"   Source breakdown: {data.get('source_counts', {})}")
+
     # Priority 1: Harvard training data (pre-processed from Dataverse)
-    harvard_path = os.path.join(data_dir, 'harvard_training_data.json')
-    if os.path.exists(harvard_path):
+    elif os.path.exists(harvard_path := os.path.join(data_dir, 'harvard_training_data.json')):
         print(f"📂 Loading Harvard training data from: {harvard_path}")
         with open(harvard_path) as f:
             data = json.load(f)
@@ -249,6 +444,8 @@ def main():
         model_path=model_path,
         epochs=100,
         learning_rate=0.05,
+        group_ids=group_ids,
+        provenance=provenance,
     )
     
     print("\n✅ Training complete!")
@@ -282,7 +479,7 @@ def generate_synthetic_data(n_samples: int = 500) -> tuple[list[list[float]], li
             1.0,                            # has_accept_language (browser)
             0.0,                            # ua_category (browser)
             random.uniform(2.0, 4.0),       # payload_entropy
-            0.0,                            # field_fill_speed (N/A)
+            random.uniform(0.0, 0.3),       # status_code_entropy (mostly 200s)
             random.uniform(1.0, 5.0),       # same_endpoint_hits
             random.uniform(0.0, 0.1),       # error_rate
             random.uniform(0.1, 0.4),       # image_ratio
@@ -312,7 +509,7 @@ def generate_synthetic_data(n_samples: int = 500) -> tuple[list[list[float]], li
                 0.0,                         # has_accept_language (missing)
                 1.0,                         # ua_category (bot)
                 random.uniform(1.0, 3.0),    # payload_entropy
-                0.0,                         # field_fill_speed (N/A)
+                random.uniform(0.0, 0.3),    # status_code_entropy (mostly 200s)
                 random.uniform(10.0, 100.0), # same_endpoint_hits (high)
                 random.uniform(0.0, 0.05),   # error_rate
                 random.uniform(0.0, 0.1),    # image_ratio
@@ -334,7 +531,7 @@ def generate_synthetic_data(n_samples: int = 500) -> tuple[list[list[float]], li
                 0.0,                         # has_accept_language
                 1.0,                         # ua_category (bot)
                 random.uniform(2.0, 4.0),    # payload_entropy
-                0.0,                         # field_fill_speed
+                random.uniform(1.0, 2.0),    # status_code_entropy (mixed 200/403/404/500)
                 random.uniform(1.0, 3.0),    # same_endpoint_hits
                 random.uniform(0.3, 0.8),    # error_rate (high - probing)
                 random.uniform(0.0, 0.05),   # image_ratio
@@ -356,7 +553,7 @@ def generate_synthetic_data(n_samples: int = 500) -> tuple[list[list[float]], li
                 0.5,                         # has_accept_language (maybe)
                 1.0,                         # ua_category (bot)
                 random.uniform(2.5, 3.5),    # payload_entropy
-                0.0,                         # field_fill_speed
+                random.uniform(0.0, 0.4),    # status_code_entropy (mostly 200s)
                 random.uniform(1.0, 5.0),    # same_endpoint_hits
                 random.uniform(0.02, 0.1),   # error_rate
                 random.uniform(0.2, 0.6),    # image_ratio (crawling images)

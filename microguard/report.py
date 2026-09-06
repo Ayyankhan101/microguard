@@ -21,6 +21,20 @@ def _colorize(text: str, color: str) -> str:
     return f"{colors.get(color, '')}{text}{colors['reset']}"
 
 
+def _label_color_name(label: str) -> str:
+    """Return the color name for a session label badge.
+
+    'automated-integration' (recognized webhook/integration senders) gets
+    its own blue/info color — it's automated by definition, but not a
+    security threat, so it shouldn't read as red (bot) or green (human).
+    """
+    if label == 'bot':
+        return 'red'
+    elif label == 'automated-integration':
+        return 'blue'
+    return 'green'
+
+
 def score_label(score: float) -> str:
     """Return a human-readable risk label for a bot score.
     
@@ -94,8 +108,9 @@ def format_terminal(results: dict[str, Any]) -> str:
     total = results.get('total_sessions', 0)
     bots = results.get('bot_count', 0)
     humans = results.get('human_count', 0)
+    integrations = results.get('integration_count', 0)
     bot_rate = results.get('bot_rate', 0.0)
-    
+
     # Status color based on bot rate
     if bot_rate < 0.1:
         status_color = 'green'
@@ -115,6 +130,8 @@ def format_terminal(results: dict[str, Any]) -> str:
     lines.append(f"  Total sessions:  {total}")
     lines.append(f"  Human sessions:  {_colorize(str(humans), 'green')}")
     lines.append(f"  Bot sessions:    {_colorize(str(bots), 'red')}")
+    if integrations:
+        lines.append(f"  Integrations:    {_colorize(str(integrations), 'blue')} (known webhooks/senders, not scored as bots)")
     lines.append("")
     
     # Visual bot rate bar
@@ -157,7 +174,7 @@ def format_terminal(results: dict[str, Any]) -> str:
                     score_str = _colorize(f"{score:.2f}", 'green')
                 
                 # Color label
-                label_str = _colorize(label, 'red' if label == 'bot' else 'green')
+                label_str = _colorize(label, _label_color_name(label))
                 
                 # Risk label
                 risk = score_label(score)
@@ -239,7 +256,7 @@ def format_json_pretty(results: dict[str, Any]) -> str:
             return _colorize(f'{val}', 'green')
     
     def _label_color(label: str) -> str:
-        return _colorize(f'"{label}"', 'red' if label == 'bot' else 'green')
+        return _colorize(f'"{label}"', _label_color_name(label))
     
     # Detect scan vs probe format
     is_probe = 'combined_score' in results and 'sessions' not in results
@@ -414,7 +431,12 @@ def format_html(results: dict[str, Any]) -> str:
             score_class = 'score-low'
             risk = score_label(score)
         
-        label_class = 'label-bot' if label == 'bot' else 'label-human'
+        if label == 'bot':
+            label_class = 'label-bot'
+        elif label == 'automated-integration':
+            label_class = 'label-integration'
+        else:
+            label_class = 'label-human'
         
         # Truncate long values
         ip = s.get('ip', '?')
@@ -656,6 +678,7 @@ def format_html(results: dict[str, Any]) -> str:
         }}
         .label-bot {{ background: rgba(239, 68, 68, 0.15); color: var(--red); }}
         .label-human {{ background: rgba(16, 185, 129, 0.15); color: var(--green); }}
+        .label-integration {{ background: rgba(59, 130, 246, 0.15); color: var(--blue); }}
         .risk-badge {{
             display: inline-block;
             padding: 0.2rem 0.6rem;
@@ -795,7 +818,7 @@ def format_html(results: dict[str, Any]) -> str:
         </div>
         
         <div class="footer">
-            <p>Powered by <a href="https://github.com/karpathy/micrograd">micrograd</a> · Microguard v0.1.0</p>
+            <p>Powered by <a href="https://github.com/karpathy/micrograd">micrograd</a> · Microguard v2.0.0</p>
             <p>Score scale: <strong style="color: var(--green)">SAFE</strong> (0.00-0.30) · <strong style="color: var(--blue)">LOW</strong> (0.31-0.59) · <strong style="color: var(--yellow)">WARNING</strong> (0.60-0.79) · <strong style="color: var(--red)">DANGER</strong> (0.80-1.00)</p>
             <p>Threshold: {threshold:.0%} — sessions above this score are classified as bots</p>
         </div>
@@ -901,7 +924,7 @@ def format_verbose(results: dict[str, Any]) -> str:
         h_reason = s.get('heuristic_reason', '')
         m_score = s.get('model_score', 0)
         
-        lines.append(f"  Heuristic: {_colorize(f'{h_label} ({h_conf:.2f})', 'red' if h_label == 'bot' else 'green')}")
+        lines.append(f"  Heuristic: {_colorize(f'{h_label} ({h_conf:.2f})', _label_color_name(h_label))}")
         lines.append(f"    Rule: {h_reason}")
         lines.append(f"  ML Model:  {m_score:.3f}")
         lines.append("")
@@ -935,8 +958,6 @@ def format_verbose(results: dict[str, Any]) -> str:
                     cats = {0.0: 'browser', 1.0: 'bot', 2.0: 'unknown'}
                     indicator = cats.get(val, '?')
                     indicator = _colorize(f'  {indicator}', 'red' if val == 1.0 else 'green' if val == 0.0 else 'yellow')
-                elif name == 'field_fill_speed' and val == 0.0:
-                    indicator = 'N/A (logs)'
                 else:
                     indicator = ''
                 

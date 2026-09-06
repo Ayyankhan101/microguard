@@ -95,36 +95,57 @@ def scan_logfile(
     session_results = []
     bot_count = 0
     human_count = 0
-    
+    integration_count = 0
+
     for session in sessions:
         # Extract features
         features = extract_features(session)
-        
+
         # Get label from heuristic rules
         heuristic_label, heuristic_conf, heuristic_reason = label_session(session)
-        
-        # Get model prediction (if available)
-        if model is not None:
-            model_score = model.predict(features)
-            # Combine heuristic and model scores
-            # Weight: 60% model, 40% heuristic
-            combined_score = 0.6 * model_score + 0.4 * heuristic_conf
-            if heuristic_label == 'bot':
-                combined_score = max(combined_score, heuristic_conf)
-        else:
-            # Use heuristic confidence as score
+
+        # Recognized webhook/integration traffic is automated by definition
+        # but not a security threat — don't run it through bot scoring at
+        # all, and don't count it toward bot or human tallies.
+        if heuristic_label == 'automated-integration':
             model_score = 0.0
-            combined_score = heuristic_conf if heuristic_label == 'bot' else (1.0 - heuristic_conf)
-        
-        # Classify
-        is_bot = combined_score >= threshold
-        label = 'bot' if is_bot else 'human'
-        
-        if is_bot:
-            bot_count += 1
+            combined_score = 0.0
+            label = 'automated-integration'
+            integration_count += 1
         else:
-            human_count += 1
-        
+            # Get model prediction (if available)
+            if model is not None:
+                model_score = model.predict(features)
+                # Combine heuristic and model scores
+                # Weight: 60% model, 40% heuristic
+                combined_score = 0.6 * model_score + 0.4 * heuristic_conf
+                if heuristic_label == 'bot':
+                    combined_score = max(combined_score, heuristic_conf)
+                elif heuristic_label == 'human':
+                    # Symmetric to the floor above: a confident heuristic
+                    # 'human' call (e.g. the single-endpoint-API exemption
+                    # for GraphQL/SOAP/RPC/gRPC traffic) caps how high the
+                    # model alone can push the score. Without this, the
+                    # heuristic fix for single-endpoint APIs doesn't
+                    # actually change the final classification whenever
+                    # the model — trained mostly on REST-style bot
+                    # patterns where low endpoint diversity is a real bot
+                    # signal — independently scores the same session high.
+                    combined_score = min(combined_score, 1.0 - heuristic_conf)
+            else:
+                # Use heuristic confidence as score
+                model_score = 0.0
+                combined_score = heuristic_conf if heuristic_label == 'bot' else (1.0 - heuristic_conf)
+
+            # Classify
+            is_bot = combined_score >= threshold
+            label = 'bot' if is_bot else 'human'
+
+            if is_bot:
+                bot_count += 1
+            else:
+                human_count += 1
+
         # Get top endpoint
         from collections import Counter
         urls = [e.url.split('?')[0] for e in session.requests]
@@ -147,11 +168,12 @@ def scan_logfile(
     
     total = len(sessions)
     bot_rate = bot_count / total if total > 0 else 0.0
-    
+
     return {
         'total_sessions': total,
         'bot_count': bot_count,
         'human_count': human_count,
+        'integration_count': integration_count,
         'bot_rate': bot_rate,
         'threshold': threshold,
         'model_used': model is not None,
@@ -161,6 +183,7 @@ def scan_logfile(
             'total_sessions': total,
             'bot_sessions': bot_count,
             'human_sessions': human_count,
+            'integration_sessions': integration_count,
             'bot_rate': bot_rate,
         },
     }
@@ -239,11 +262,11 @@ def main():
     # probe command
     probe_parser = subparsers.add_parser(
         'probe',
-        help='Probe a live URL for bot detection signals'
+        help="Fingerprint how automated/hardened a live URL looks (not visitor classification — use 'scan' for that)"
     )
     probe_parser.add_argument(
         'url',
-        help='URL to probe (e.g., https://example.com)'
+        help='URL to probe — http(s):// or ws(s):// (e.g., https://example.com, wss://example.com/socket)'
     )
     probe_parser.add_argument(
         '--count', '-n',
@@ -387,8 +410,44 @@ def main():
             sys.exit(0)
     
     elif args.command == 'probe':
+        is_websocket = args.url.startswith(('ws://', 'wss://'))
+
+        if is_websocket:
+            from .scanner import (
+                format_ws_probe_html,
+                format_ws_probe_report,
+                probe_ws_and_analyze,
+            )
+
+            # No model to load — the session-trained MLP has no valid
+            # input for probe data of any kind (HTTP or WebSocket).
+            results = probe_ws_and_analyze(
+                url=args.url,
+                count=args.count,
+                delay=args.delay,
+                threshold=args.threshold,
+                verbose=True,
+            )
+
+            if args.json_pretty:
+                from .report import format_json_pretty
+                content = format_json_pretty(results)
+            elif args.output == 'json':
+                content = json.dumps(results, indent=2, default=str)
+            elif args.output == 'html':
+                content = format_ws_probe_html(results)
+            else:
+                content = format_ws_probe_report(results)
+
+            if args.output_file:
+                _write_report(args.output_file, content)
+            else:
+                print(content)
+
+            sys.exit(1 if results['label'] == 'bot' else 0)
+
         from .scanner import format_probe_report, probe_and_analyze
-        
+
         # Load model
         model = None
         model_available = os.path.exists(args.model)
@@ -397,7 +456,7 @@ def main():
                 model = BotDetector(args.model)
             except Exception as e:  # noqa: BLE001 — model load is best-effort, falls back to heuristics
                 print(f"⚠️  Could not load model: {e}", file=sys.stderr)
-        
+
         # Run probe analysis
         results = probe_and_analyze(
             url=args.url,
@@ -407,7 +466,7 @@ def main():
             threshold=args.threshold,
             verbose=True,
         )
-        
+
         # Format and output
         if args.verbose:
             from .scanner import format_probe_verbose
@@ -422,12 +481,12 @@ def main():
             content = format_probe_html(results)
         else:
             content = format_probe_report(results)
-        
+
         if args.output_file:
             _write_report(args.output_file, content)
         else:
             print(content)
-        
+
         # Exit code: 1 if bot detected
         if results['label'] == 'bot':
             sys.exit(1)
@@ -435,7 +494,7 @@ def main():
             sys.exit(0)
     
     elif args.command == 'info':
-        print("🔍 Microguard v0.1.0")
+        print("🔍 Microguard v2.0.0")
         print("   Bot Traffic Audit Tool powered by micrograd")
         print()
         print("   Usage:")

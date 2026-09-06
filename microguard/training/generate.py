@@ -43,7 +43,7 @@ def generate_human_session() -> list[float]:
             1.0,                            # has_accept_language
             0.0,                            # ua_category (browser)
             random.uniform(2.2, 3.8),       # payload_entropy
-            0.0,                            # field_fill_speed (N/A)
+            random.uniform(0.0, 0.3),       # status_code_entropy (mostly 200s)
             random.uniform(1.0, 4.0),       # same_endpoint_hits
             random.uniform(0.0, 0.08),      # error_rate
             random.uniform(0.15, 0.45),     # image_ratio
@@ -65,7 +65,7 @@ def generate_human_session() -> list[float]:
             1.0,                            # has_accept_language
             0.0,                            # ua_category
             random.uniform(2.5, 3.5),       # payload_entropy
-            0.0,                            # field_fill_speed
+            random.uniform(0.0, 0.3),       # status_code_entropy (mostly 200s)
             random.uniform(1.0, 3.0),       # same_endpoint_hits
             random.uniform(0.0, 0.05),      # error_rate
             random.uniform(0.3, 0.6),       # image_ratio (product images)
@@ -87,7 +87,7 @@ def generate_human_session() -> list[float]:
             1.0,                            # has_accept_language
             0.0,                            # ua_category
             random.uniform(2.0, 3.0),       # payload_entropy
-            0.0,                            # field_fill_speed
+            random.uniform(0.0, 0.2),       # status_code_entropy (mostly 200s)
             random.uniform(1.0, 3.0),       # same_endpoint_hits
             random.uniform(0.0, 0.03),      # error_rate
             random.uniform(0.05, 0.2),      # image_ratio
@@ -128,7 +128,7 @@ def generate_bot_session() -> list[float]:
             0.0,                            # has_accept_language (missing)
             1.0,                            # ua_category (bot)
             random.uniform(1.5, 2.5),       # payload_entropy
-            0.0,                            # field_fill_speed
+            random.uniform(0.0, 0.3),       # status_code_entropy (mostly 200s)
             random.uniform(15.0, 100.0),    # same_endpoint_hits (high)
             random.uniform(0.0, 0.03),      # error_rate
             random.uniform(0.0, 0.05),      # image_ratio
@@ -151,7 +151,7 @@ def generate_bot_session() -> list[float]:
             0.0,                            # has_accept_language
             1.0,                            # ua_category
             random.uniform(2.0, 4.0),       # payload_entropy
-            0.0,                            # field_fill_speed
+            random.uniform(1.0, 2.0),       # status_code_entropy (mixed 200/403/404/500)
             random.uniform(1.0, 3.0),       # same_endpoint_hits
             random.uniform(0.2, 0.8),       # error_rate (high - probing)
             random.uniform(0.0, 0.03),      # image_ratio
@@ -174,7 +174,7 @@ def generate_bot_session() -> list[float]:
             0.3,                            # has_accept_language (maybe)
             1.0,                            # ua_category
             random.uniform(2.5, 3.5),       # payload_entropy
-            0.0,                            # field_fill_speed
+            random.uniform(0.0, 0.4),       # status_code_entropy (mostly 200s)
             random.uniform(1.0, 5.0),       # same_endpoint_hits
             random.uniform(0.01, 0.08),     # error_rate
             random.uniform(0.2, 0.5),       # image_ratio (crawling images)
@@ -197,13 +197,52 @@ def generate_bot_session() -> list[float]:
             0.0,                            # has_accept_language
             1.0,                            # ua_category
             random.uniform(3.0, 5.0),       # payload_entropy (random data)
-            0.0,                            # field_fill_speed
+            random.uniform(0.0, 0.5),       # status_code_entropy
             random.uniform(10.0, 80.0),     # same_endpoint_hits (high)
             random.uniform(0.0, 0.1),       # error_rate
             random.uniform(0.0, 0.02),      # image_ratio
             random.uniform(0.0, 0.3),       # night_ratio
             random.uniform(10.0, 40.0),     # max_sustained_click_rate
         ]
+
+
+def generate_stealthy_bot_session() -> list[float]:
+    """Generate a feature vector for a bot deliberately mimicking a human.
+
+    Unlike `generate_bot_session()`'s overt scraper/scanner/crawler/api_abuse
+    patterns, this models a headless-browser or residential-proxy bot that
+    spoofs a browser UA, randomizes its own timing, and browses more than
+    one page specifically to evade timing/UA/endpoint-diversity heuristics.
+
+    This is synthetic, not real captured evidence — there's no such traffic
+    in this project's real training data. It exists to HONESTLY MEASURE a
+    known blind spot (see `tests/test_training_quality.py::TestAdversarialRobustness`),
+    not to train on: a bot generator this close to the human distribution
+    would just teach the model to draw an arbitrary line between two
+    synthetic distributions, not learn anything real. Held out of training
+    for that reason — eval-only.
+    """
+    return [
+        random.uniform(3.0, 15.0),       # time_since_last_request (jittered, human-range)
+        random.uniform(2.0, 10.0),       # requests_per_minute_1m
+        random.uniform(2.0, 8.0),        # requests_per_minute_5m
+        random.uniform(0.3, 0.7),        # inter_request_time_cv (randomized, but more bounded than genuine human burstiness)
+        random.uniform(60.0, 400.0),     # time_since_session_start
+        random.uniform(4.0, 15.0),       # endpoint_count (browses multiple pages on purpose)
+        random.uniform(1.8, 3.2),        # endpoint_sequence_entropy
+        random.uniform(0.5, 0.9),        # unique_endpoint_ratio
+        0.0,                              # method_mismatch_count
+        random.uniform(0.85, 1.0),       # header_consistency_score (spoofed to look consistent)
+        1.0,                              # has_accept_language (spoofed browser headers)
+        0.0,                              # ua_category (spoofed browser UA)
+        random.uniform(2.3, 3.5),        # payload_entropy
+        0.0,                              # status_code_entropy (avoids errors — real humans occasionally mistype URLs, bots don't)
+        random.uniform(3.0, 10.0),       # same_endpoint_hits (still targets specific content more than a real browsing session)
+        0.0,                              # error_rate (near-zero — a tell: real humans generate some 404s)
+        random.uniform(0.05, 0.2),       # image_ratio (lower than real browsing — skips loading assets it doesn't need)
+        random.uniform(0.0, 0.4),        # night_ratio (runs at any hour, unlike clustered real human activity)
+        random.uniform(0.5, 2.0),        # max_sustained_click_rate
+    ]
 
 
 def generate_dataset(

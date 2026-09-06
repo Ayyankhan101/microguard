@@ -1,5 +1,6 @@
 """Log file parser for Nginx combined and JSON structured formats."""
 
+import gzip
 import json
 import re
 from collections.abc import Iterator
@@ -187,9 +188,16 @@ def parse_json_line(line: str) -> LogEntry | None:
     )
 
 
+def _open_text(filepath: str):
+    """Open a log file in text mode, transparently decompressing .gz files."""
+    if filepath.endswith('.gz'):
+        return gzip.open(filepath, 'rt', errors='replace')
+    return open(filepath, 'r', errors='replace')
+
+
 def detect_format(filepath: str) -> str:
     """Auto-detect log format by reading first few lines."""
-    with open(filepath, 'r', errors='replace') as f:
+    with _open_text(filepath) as f:
         for i, line in enumerate(f):
             if i >= 10:
                 break
@@ -225,7 +233,7 @@ def parse_file(filepath: str, fmt: str = 'auto') -> Iterator[LogEntry]:
     parser = parse_json_line if fmt == 'json' else parse_nginx_line
     
     try:
-        with open(filepath, 'r', errors='replace') as f:
+        with _open_text(filepath) as f:
             for line in f:
                 entry = parser(line)
                 if entry is not None:

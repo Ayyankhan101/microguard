@@ -2,12 +2,12 @@ from setuptools import find_packages, setup
 
 setup(
     name="microguard",
-    version="0.1.0",
+    version="2.0.0",
     description="CLI bot traffic audit tool powered by micrograd",
     author="Microguard",
     license="MIT",
     packages=find_packages(),
-    python_requires=">=3.8",
+    python_requires=">=3.10",
     install_requires=[
         "micrograd",
     ],
@@ -17,7 +17,7 @@ setup(
         ],
     },
     classifiers=[
-        "Development Status :: 3 - Alpha",
+        "Development Status :: 4 - Beta",
         "Intended Audience :: Developers",
         "License :: OSI Approved :: MIT License",
         "Programming Language :: Python :: 3",

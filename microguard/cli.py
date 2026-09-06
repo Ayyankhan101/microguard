@@ -261,6 +261,40 @@ def main():
         help='Continuously monitor log file for new bot traffic (tails the file)'
     )
     
+    # serve command — live check server for nginx auth_request
+    serve_parser = subparsers.add_parser(
+        'serve',
+        help='Start live check server for nginx auth_request'
+    )
+    serve_parser.add_argument(
+        '--host',
+        default='127.0.0.1',
+        help='Bind address (default: 127.0.0.1)'
+    )
+    serve_parser.add_argument(
+        '--port',
+        type=int,
+        default=8400,
+        help='Listen port (default: 8400)'
+    )
+    serve_parser.add_argument(
+        '--redis-url',
+        default='redis://localhost:6379',
+        help='Redis connection URL (default: redis://localhost:6379)'
+    )
+    serve_parser.add_argument(
+        '--block-threshold',
+        type=float,
+        default=0.85,
+        help='Score above which requests are blocked (default: 0.85)'
+    )
+    serve_parser.add_argument(
+        '--session-ttl',
+        type=int,
+        default=1800,
+        help='Session expiry in seconds (default: 1800)'
+    )
+
     # probe command
     probe_parser = subparsers.add_parser(
         'probe',
@@ -495,6 +529,16 @@ def main():
         else:
             sys.exit(0)
     
+    elif args.command == 'serve':
+        from .live.server import run_server
+        run_server(
+            host=args.host,
+            port=args.port,
+            redis_url=args.redis_url,
+            block_threshold=args.block_threshold,
+            session_ttl=args.session_ttl,
+        )
+
     elif args.command == 'info':
         print("🔍 Microguard v2.0.0")
         print("   Bot Traffic Audit Tool powered by micrograd")

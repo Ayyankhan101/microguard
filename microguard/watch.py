@@ -23,7 +23,8 @@ def _read_new_lines(filepath: str, offset: int, fmt: str):
         (new_lines, new_offset)
     """
     try:
-        with open(filepath, 'r', errors='replace') as f:
+        # encoding='utf-8' explicit — see parser.py::_open_text for why.
+        with open(filepath, 'r', encoding='utf-8', errors='replace') as f:
             f.seek(offset)
             new_data = f.read()
             new_offset = f.tell()

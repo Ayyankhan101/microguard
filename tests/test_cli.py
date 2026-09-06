@@ -188,7 +188,7 @@ class TestMainCLI:
         path = nginx_log_file(_bot_session_lines())
         out = tmp_path / "report.json"
         self._run(monkeypatch, ['scan', path, '--output', 'json', '--output-file', str(out)])
-        data = json.loads(out.read_text())
+        data = json.loads(out.read_text(encoding='utf-8'))
         assert data['total_sessions'] == 1
 
     def test_scan_bad_output_file_path_exits_cleanly_not_traceback(self, monkeypatch, nginx_log_file):
@@ -200,7 +200,7 @@ class TestMainCLI:
         path = nginx_log_file(_bot_session_lines())
         out = tmp_path / "report.html"
         self._run(monkeypatch, ['scan', path, '--output', 'html', '--output-file', str(out)])
-        assert '<html' in out.read_text().lower()
+        assert '<html' in out.read_text(encoding='utf-8').lower()
 
     def test_info_command_does_not_exit_and_prints_version(self, monkeypatch, capsys):
         monkeypatch.setattr(sys, 'argv', ['microguard', 'info'])

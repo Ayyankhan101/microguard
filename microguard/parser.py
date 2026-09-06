@@ -189,10 +189,16 @@ def parse_json_line(line: str) -> LogEntry | None:
 
 
 def _open_text(filepath: str):
-    """Open a log file in text mode, transparently decompressing .gz files."""
+    """Open a log file in text mode, transparently decompressing .gz files.
+
+    Explicit encoding='utf-8' — without it, Python falls back to the OS
+    locale encoding (cp1252 on Windows), which would silently mangle any
+    non-ASCII bytes in a real access log (unicode user agents, referrers,
+    URLs) instead of decoding them correctly, and differently per platform.
+    """
     if filepath.endswith('.gz'):
-        return gzip.open(filepath, 'rt', errors='replace')
-    return open(filepath, 'r', errors='replace')
+        return gzip.open(filepath, 'rt', encoding='utf-8', errors='replace')
+    return open(filepath, 'r', encoding='utf-8', errors='replace')
 
 
 def detect_format(filepath: str) -> str:

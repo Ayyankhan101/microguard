@@ -64,6 +64,6 @@ def nginx_log_file(tmp_path):
     """
     def _write(lines: list[str], name: str = "access.log") -> str:
         log_path = tmp_path / name
-        log_path.write_text("\n".join(lines) + "\n")
+        log_path.write_text("\n".join(lines) + "\n", encoding='utf-8')
         return str(log_path)
     return _write

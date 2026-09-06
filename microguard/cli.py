@@ -201,6 +201,14 @@ def scan_logfile(
 
 def main():
     """CLI entry point."""
+    if sys.platform == 'win32':
+        # Windows consoles default stdout/stderr to the OS locale codepage
+        # (commonly cp1252), which can't encode the emoji used throughout
+        # terminal/report output — every `microguard scan` would crash on
+        # its own default output. Force UTF-8 regardless of console codepage.
+        sys.stdout.reconfigure(encoding='utf-8')
+        sys.stderr.reconfigure(encoding='utf-8')
+
     parser = argparse.ArgumentParser(
         prog='microguard',
         description='🔍 Microguard — Bot Traffic Audit Tool',

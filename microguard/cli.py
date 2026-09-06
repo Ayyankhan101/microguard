@@ -16,6 +16,7 @@ from .labeler import label_session
 from .model import BotDetector
 from .parser import LogEntry, parse_file
 from .report import print_report
+from .scoring import compute_combined_score
 
 # Default threshold for bot classification
 DEFAULT_THRESHOLD = 0.7
@@ -126,26 +127,9 @@ def scan_logfile(
             # Get model prediction (if available)
             if model is not None:
                 model_score = model.predict(features)
-                # Combine heuristic and model scores
-                # Weight: 60% model, 40% heuristic
-                combined_score = 0.6 * model_score + 0.4 * heuristic_conf
-                if heuristic_label == 'bot':
-                    combined_score = max(combined_score, heuristic_conf)
-                elif heuristic_label == 'human':
-                    # Symmetric to the floor above: a confident heuristic
-                    # 'human' call (e.g. the single-endpoint-API exemption
-                    # for GraphQL/SOAP/RPC/gRPC traffic) caps how high the
-                    # model alone can push the score. Without this, the
-                    # heuristic fix for single-endpoint APIs doesn't
-                    # actually change the final classification whenever
-                    # the model — trained mostly on REST-style bot
-                    # patterns where low endpoint diversity is a real bot
-                    # signal — independently scores the same session high.
-                    combined_score = min(combined_score, 1.0 - heuristic_conf)
             else:
-                # Use heuristic confidence as score
                 model_score = 0.0
-                combined_score = heuristic_conf if heuristic_label == 'bot' else (1.0 - heuristic_conf)
+            combined_score = compute_combined_score(heuristic_label, heuristic_conf, model_score)
 
             # Classify
             is_bot = combined_score >= threshold

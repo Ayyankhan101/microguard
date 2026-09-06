@@ -14,6 +14,7 @@ from .labeler import label_session
 from .model import BotDetector
 from .parser import LogEntry, detect_format, parse_json_line, parse_nginx_line
 from .report import _colorize, score_label, score_label_color
+from .scoring import compute_combined_score
 
 
 def _read_new_lines(filepath: str, offset: int, fmt: str):
@@ -182,19 +183,9 @@ def watch_logfile(
                 # Get model prediction
                 if model:
                     m_score = model.predict(features)
-                    combined = 0.6 * m_score + 0.4 * h_conf
-                    if h_label == 'bot':
-                        combined = max(combined, h_conf)
-                    elif h_label == 'human':
-                        # Symmetric to the floor above — see the identical
-                        # fix in cli.py::scan_logfile for why this matters:
-                        # without it, a confident heuristic 'human' call
-                        # (e.g. single-endpoint API sessions) can still be
-                        # overridden by the model's independent score.
-                        combined = min(combined, 1.0 - h_conf)
                 else:
                     m_score = 0.0
-                    combined = h_conf if h_label == 'bot' else (1.0 - h_conf)
+                combined = compute_combined_score(h_label, h_conf, m_score)
                 
                 is_bot = combined >= threshold
                 label = 'bot' if is_bot else 'human'

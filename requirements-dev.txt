@@ -1,0 +1,6 @@
+-e .
+pytest
+pytest-cov
+ruff
+mypy
+vulture

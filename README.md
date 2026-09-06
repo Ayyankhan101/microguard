@@ -405,7 +405,9 @@ microguard/
 │       ├── generate.py         # Synthetic bot/human data (top-up only)
 │       ├── groundtruth.py      # organization-x forensic rule matcher
 │       └── build_real_dataset.py  # Builds the real (+capped synthetic) training set
-├── tests/                      # 223 tests
+├── tests/                      # 248 tests
+│   ├── conftest.py             # Shared LogEntry/Session/log-file fixtures
+│   ├── test_cli.py             # 20 tests (scan_logfile + main() end-to-end)
 │   ├── test_parser.py          # 19 tests
 │   ├── test_features.py        # 21 tests
 │   ├── test_labeler.py         # 7 tests
@@ -415,9 +417,9 @@ microguard/
 │   ├── test_scanner_extended.py # 13 tests
 │   ├── test_scanner_ws.py      # 15 tests (WebSocket probe + RFC 6455 framing)
 │   ├── test_groundtruth.py     # 16 tests
-│   ├── test_training_quality.py # 37 tests (train-set fit + held-out generalization)
+│   ├── test_training_quality.py # 38 tests (train-set fit + held-out generalization)
 │   ├── test_report.py          # 45 tests
-│   └── test_watch.py           # 8 tests
+│   └── test_watch.py           # 12 tests (incl. watch_logfile() end-to-end)
 └── data/
     ├── model.json                    # Pre-trained model weights (1.8KB)
     ├── normalization.json            # Feature normalization params
@@ -431,7 +433,7 @@ microguard/
 ## Testing
 
 ```bash
-# Run all tests (223 tests)
+# Run all tests (248 tests)
 python -m pytest tests/
 
 # Run with verbose output
@@ -440,11 +442,18 @@ python -m pytest tests/ -v
 # Run specific test file
 python -m pytest tests/test_features.py
 
-# Run only new tests
-python -m pytest tests/test_labeler_rules.py tests/test_report.py tests/test_watch.py
+# Coverage report (pip install pytest-cov first — dev-only, see requirements-dev.txt)
+pytest --cov=microguard --cov-report=term-missing
 ```
 
-**Test coverage:** 223 tests (all passing)
+**Test coverage:** 248 tests (247 passing, 1 skipped — network-dependent).
+Line coverage baseline: **71%**
+(no hard CI gate yet — `cli.py` and `watch.py`, previously untested at the
+integration level, are now at 85%/83%; `training/*.py` scripts are at 0%
+since they're one-shot data pipelines validated by manual runs, not unit
+tests). Shared `LogEntry`/`Session`/log-file fixtures live in
+`tests/conftest.py` — reuse them in new tests instead of hand-rolling
+another builder.
 
 ## CI/CD
 

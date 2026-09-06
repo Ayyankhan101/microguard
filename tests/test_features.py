@@ -12,32 +12,6 @@ from microguard.features import (
     extract_features,
     group_into_sessions,
 )
-from microguard.parser import LogEntry
-
-
-def _make_entry(
-    ip: str = "192.168.1.1",
-    timestamp: datetime | None = None,
-    method: str = "GET",
-    url: str = "/products",
-    status: int = 200,
-    size: int = 1234,
-    referer: str = "https://example.com",
-    user_agent: str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)",
-) -> LogEntry:
-    """Create a test log entry."""
-    if timestamp is None:
-        timestamp = datetime(2023, 3, 24, 17, 7, 41, tzinfo=timezone.utc)
-    return LogEntry(
-        ip=ip,
-        timestamp=timestamp,
-        method=method,
-        url=url,
-        status=status,
-        size=size,
-        referer=referer,
-        user_agent=user_agent,
-    )
 
 
 class TestHelpers:
@@ -91,21 +65,21 @@ class TestFeatureExtraction:
         assert len(features) == 19
         assert all(f == 0.0 for f in features)
     
-    def test_single_request(self):
+    def test_single_request(self, make_entry):
         session = Session("192.168.1.1", "Mozilla/5.0")
-        session.add_request(_make_entry())
+        session.add_request(make_entry())
         features = extract_features(session)
         assert len(features) == 19
         # Session duration should be 0 (single request)
         assert features[4] == 0.0
     
-    def test_multiple_requests(self):
+    def test_multiple_requests(self, make_entry):
         session = Session("192.168.1.1", "Mozilla/5.0")
         
         # Add 5 requests with 1-second gaps
         base_time = datetime(2023, 3, 24, 17, 0, 0, tzinfo=timezone.utc)
         for i in range(5):
-            entry = _make_entry(
+            entry = make_entry(
                 timestamp=base_time + timedelta(seconds=i),
                 url=f"/page/{i}",
             )
@@ -120,20 +94,20 @@ class TestFeatureExtraction:
         # Endpoint count should be 5
         assert features[5] == 5.0
     
-    def test_bot_user_agent(self):
+    def test_bot_user_agent(self, make_entry):
         session = Session("10.0.0.1", "python-requests/2.28.0")
-        session.add_request(_make_entry(user_agent="python-requests/2.28.0"))
+        session.add_request(make_entry(user_agent="python-requests/2.28.0"))
         
         features = extract_features(session)
         # ua_category should be 1 (bot)
         assert features[11] == 1.0
     
-    def test_browser_user_agent(self):
+    def test_browser_user_agent(self, make_entry):
         session = Session(
             "192.168.1.1",
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
         )
-        session.add_request(_make_entry(
+        session.add_request(make_entry(
             user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
         ))
         
@@ -143,13 +117,13 @@ class TestFeatureExtraction:
         # has_accept_language should be 1 (browser)
         assert features[10] == 1.0
     
-    def test_uniform_timing(self):
+    def test_uniform_timing(self, make_entry):
         """Bot-like uniform timing should have low CV."""
         session = Session("10.0.0.1", "python-requests/2.28.0")
         
         base_time = datetime(2023, 3, 24, 17, 0, 0, tzinfo=timezone.utc)
         for i in range(10):
-            entry = _make_entry(
+            entry = make_entry(
                 timestamp=base_time + timedelta(seconds=i * 0.05),  # 50ms uniform
                 url=f"/api/data?page={i}",
             )
@@ -159,23 +133,23 @@ class TestFeatureExtraction:
         # CV should be very low (uniform timing)
         assert features[3] < 0.1
     
-    def test_error_rate(self):
+    def test_error_rate(self, make_entry):
         """Sessions with many 4xx/5xx errors should have high error_rate."""
         session = Session("10.0.0.1", "python-requests/2.28.0")
         
         for i in range(10):
             status = 404 if i < 5 else 200  # 50% errors
-            entry = _make_entry(status=status)
+            entry = make_entry(status=status)
             session.add_request(entry)
         
         features = extract_features(session)
         # error_rate should be ~0.5
         assert abs(features[15] - 0.5) < 0.01
     
-    def test_feature_count(self):
+    def test_feature_count(self, make_entry):
         """Verify we always extract exactly 19 features."""
         session = Session("192.168.1.1", "Mozilla/5.0")
-        session.add_request(_make_entry())
+        session.add_request(make_entry())
         features = extract_features(session)
         assert len(features) == 19
         assert len(FEATURE_NAMES) == 19
@@ -184,28 +158,28 @@ class TestFeatureExtraction:
 class TestSessionGrouping:
     """Tests for session grouping."""
     
-    def test_single_ip(self):
+    def test_single_ip(self, make_entry):
         entries = [
-            _make_entry(ip="192.168.1.1", timestamp=datetime(2023, 3, 24, 17, 0, i, tzinfo=timezone.utc))
+            make_entry(ip="192.168.1.1", timestamp=datetime(2023, 3, 24, 17, 0, i, tzinfo=timezone.utc))
             for i in range(5)
         ]
         sessions = group_into_sessions(entries)
         assert len(sessions) == 1
         assert sessions[0].request_count == 5
     
-    def test_multiple_ips(self):
+    def test_multiple_ips(self, make_entry):
         entries = [
-            _make_entry(ip="192.168.1.1", timestamp=datetime(2023, 3, 24, 17, 0, 0, tzinfo=timezone.utc)),
-            _make_entry(ip="192.168.1.2", timestamp=datetime(2023, 3, 24, 17, 0, 1, tzinfo=timezone.utc)),
+            make_entry(ip="192.168.1.1", timestamp=datetime(2023, 3, 24, 17, 0, 0, tzinfo=timezone.utc)),
+            make_entry(ip="192.168.1.2", timestamp=datetime(2023, 3, 24, 17, 0, 1, tzinfo=timezone.utc)),
         ]
         sessions = group_into_sessions(entries)
         assert len(sessions) == 2
     
-    def test_timeout_splits_session(self):
+    def test_timeout_splits_session(self, make_entry):
         """Requests far apart should create new sessions."""
         entries = [
-            _make_entry(ip="192.168.1.1", timestamp=datetime(2023, 3, 24, 17, 0, 0, tzinfo=timezone.utc)),
-            _make_entry(ip="192.168.1.1", timestamp=datetime(2023, 3, 24, 18, 0, 0, tzinfo=timezone.utc)),  # 1 hour later
+            make_entry(ip="192.168.1.1", timestamp=datetime(2023, 3, 24, 17, 0, 0, tzinfo=timezone.utc)),
+            make_entry(ip="192.168.1.1", timestamp=datetime(2023, 3, 24, 18, 0, 0, tzinfo=timezone.utc)),  # 1 hour later
         ]
         sessions = group_into_sessions(entries, timeout_minutes=30)
         assert len(sessions) == 2

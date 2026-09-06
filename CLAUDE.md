@@ -29,8 +29,23 @@ microguard probe <url>               # Probe live URL
 - typecheck: mypy microguard
 - lint: ruff check .
 - test: pytest
+- coverage: pytest --cov=microguard --cov-report=term-missing (baseline: 71%; no hard gate yet — see CHANGELOG)
 - deadcode: vulture microguard microguard/vulture_whitelist.py
 - shell: skip (no shell scripts)
+
+## Test suite conventions
+
+- Shared `LogEntry`/`Session`/temp-log-file builders live in `tests/conftest.py`
+  (`make_entry`, `make_session`, `nginx_log_file` fixtures) — use them
+  instead of writing a new local `_make_entry`-style helper.
+  `tests/test_groundtruth.py`'s `_entry()` is a deliberate exception (it
+  auto-synthesizes a realistic `raw_line`, which the shared fixture
+  doesn't need for other tests).
+- `cli.py` and `watch.py` are tested end-to-end (`tests/test_cli.py`,
+  `TestWatchLogfile` in `tests/test_watch.py`), not just their helpers —
+  keep new CLI/watch behavior covered there, not only at the unit level.
+- `watch_logfile()` takes a test-only `_max_iterations` param to terminate
+  its otherwise-infinite loop; don't use it from product code.
 
 ## Skill routing
 

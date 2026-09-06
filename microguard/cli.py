@@ -58,9 +58,19 @@ def scan_logfile(
     """
     # Parse log file
     print(f"📂 Parsing {filepath}...", file=sys.stderr)
-    
+
+    if not os.path.exists(filepath):
+        return {
+            'total_sessions': 0,
+            'bot_count': 0,
+            'human_count': 0,
+            'bot_rate': 0.0,
+            'sessions': [],
+            'error': f'Log file not found: {filepath}',
+        }
+
     entries: list[LogEntry] = list(parse_file(filepath, fmt))
-    
+
     if not entries:
         return {
             'total_sessions': 0,

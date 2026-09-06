@@ -2,6 +2,40 @@
 
 ## [Unreleased]
 
+### Added
+- `tests/conftest.py` — shared `make_entry`/`make_session`/`nginx_log_file`
+  fixtures, replacing three near-identical hand-rolled `_make_entry` copies
+  across `test_features.py`, `test_labeler_rules.py`.
+- `tests/test_cli.py` (20 tests) — `cli.py` (550 lines: `scan_logfile()`,
+  `main()`, all argument parsing, score-blending) had zero dedicated tests
+  before this. Covers exit codes, output formats, the `automated-integration`
+  exclusion, the probe ws://-vs-http(s) dispatch, and a direct regression
+  test for the heuristic/model score-blending symmetric cap.
+- `TestWatchLogfile` in `tests/test_watch.py` (4 tests) — `watch_logfile()`'s
+  130-line orchestration loop was untested (only its two small helpers
+  were). Required adding a test-only `_max_iterations` seam to
+  `watch.py::watch_logfile` to terminate its otherwise-infinite loop.
+- Coverage tooling: `pytest-cov` (dev-only, `requirements-dev.txt`),
+  `pyproject.toml` pytest/coverage config, wired into CI. Baseline: 71%
+  overall; no hard gate yet.
+
+### Fixed
+- **`watch.py` had the same heuristic/model score-blending asymmetry bug
+  already fixed in `cli.py`** — an independent, undiscovered copy of the
+  same logic. A confident heuristic 'human' call (e.g. a GraphQL session)
+  could still be overridden by the model's score in watch mode. Found
+  while writing `TestWatchLogfile`; fixed with the same symmetric cap.
+- `scan_logfile()` raised a raw `FileNotFoundError` for a missing log file
+  instead of returning its own established `{'error': ...}` dict shape
+  (the graceful path only existed in `main()`'s pre-check, not in the
+  underlying function documented and exported as part of the Python API).
+- CI's CLI smoke test had `continue-on-error: true`, silently swallowing a
+  genuine crash (it was added because `microguard scan` correctly exits 1
+  when it detects bots — but that setting also ignores real breakage). Now
+  checks stdout for a traceback / the expected report header instead of
+  relying on exit code, which can't distinguish "detected bots" from
+  "crashed" (both exit 1).
+
 ## [2.0.0] - 2026-09-06
 
 v2.0 replaces the synthetic-only bot training data with real ground-truth

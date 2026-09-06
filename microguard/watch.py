@@ -83,9 +83,10 @@ def watch_logfile(
     model_path: str | None = None,
     interval: float = 2.0,
     session_timeout: int = 5,
+    _max_iterations: int | None = None,
 ):
     """Continuously monitor a log file for bot traffic.
-    
+
     Args:
         filepath: Path to the log file to monitor
         fmt: Log format ('auto', 'nginx', 'json')
@@ -93,6 +94,10 @@ def watch_logfile(
         model_path: Path to pre-trained model
         interval: Polling interval in seconds
         session_timeout: Session grouping timeout in minutes
+        _max_iterations: Stop after this many poll iterations instead of
+            running forever. Test-only seam (unused by the CLI, which
+            relies on KeyboardInterrupt) — the loop is otherwise
+            unterminable without it.
     """
     # Validate file exists
     if not os.path.exists(filepath):
@@ -133,11 +138,18 @@ def watch_logfile(
     if os.path.exists(filepath):
         offset = os.path.getsize(filepath)
     
+    iterations = 0
     try:
         while True:
             time.sleep(interval)
-            
+            iterations += 1
+            stop_after_this_iteration = (
+                _max_iterations is not None and iterations >= _max_iterations
+            )
+
             if not os.path.exists(filepath):
+                if stop_after_this_iteration:
+                    break
                 continue
             
             # Read new lines
@@ -149,6 +161,8 @@ def watch_logfile(
                     now = datetime.now(timezone.utc).strftime('%H:%M:%S')
                     print(f"  [{now}] Watching... ({total_scanned} scanned, {total_bots} bots, {total_humans} human)")
                     last_report = time.time()
+                if stop_after_this_iteration:
+                    break
                 continue
             
             offset = new_offset
@@ -170,6 +184,13 @@ def watch_logfile(
                     combined = 0.6 * m_score + 0.4 * h_conf
                     if h_label == 'bot':
                         combined = max(combined, h_conf)
+                    elif h_label == 'human':
+                        # Symmetric to the floor above — see the identical
+                        # fix in cli.py::scan_logfile for why this matters:
+                        # without it, a confident heuristic 'human' call
+                        # (e.g. single-endpoint API sessions) can still be
+                        # overridden by the model's independent score.
+                        combined = min(combined, 1.0 - h_conf)
                 else:
                     m_score = 0.0
                     combined = h_conf if h_label == 'bot' else (1.0 - h_conf)
@@ -196,6 +217,9 @@ def watch_logfile(
                       f"{_colorize(str(total_humans), 'green')} human "
                       f"({bot_rate:.0%} bot rate)")
                 last_report = time.time()
+
+            if stop_after_this_iteration:
+                break
     
     except KeyboardInterrupt:
         print()

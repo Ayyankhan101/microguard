@@ -27,13 +27,27 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -e .
-          pip install pytest
+          pip install pytest pytest-cov
 
       - name: Run tests
-        run: python -m pytest tests/ -v --tb=short
+        run: python -m pytest tests/ -v --tb=short --cov=microguard --cov-report=term-missing
 
       - name: Test CLI
+        shell: bash
         run: |
-          microguard scan data/sample_access.log
-        # CLI exits 1 when bots detected, so allow failure but still validate it runs
-        continue-on-error: true
+          set +e
+          output=$(microguard scan data/sample_access.log 2>&1)
+          code=$?
+          echo "$output"
+          # microguard exits 1 by design when it detects bot traffic (it
+          # does, in this sample log) — that's not a failure. A traceback
+          # or a missing report header means the CLI actually broke.
+          if echo "$output" | grep -q "Traceback (most recent call last)"; then
+            echo "::error::CLI crashed with a traceback"
+            exit 1
+          fi
+          if ! echo "$output" | grep -q "Microguard Bot Traffic Report"; then
+            echo "::error::CLI did not produce the expected report output (exit code $code)"
+            exit 1
+          fi
+          echo "CLI ran successfully (exit code $code)"

@@ -15,68 +15,41 @@ from microguard.labeler import (
     label_entries,
     label_session,
 )
-from microguard.parser import LogEntry
-
-
-def _make_entry(
-    ip="192.168.1.1",
-    timestamp=None,
-    method="GET",
-    url="/page",
-    status=200,
-    size=1024,
-    referer="-",
-    user_agent="Mozilla/5.0",
-):
-    if timestamp is None:
-        timestamp = datetime(2023, 3, 24, 17, 0, 0, tzinfo=timezone.utc)
-    return LogEntry(
-        ip=ip, timestamp=timestamp, method=method, url=url,
-        status=status, size=size, referer=referer, user_agent=user_agent,
-    )
-
-
-def _make_session(ip, ua, entries):
-    session = Session(ip, ua)
-    for e in entries:
-        session.add_request(e)
-    return session
-
 
 # ===== Cloudflare WAF Tests =====
 
 class TestCloudflareWAF:
     """Tests for Cloudflare WAF detection."""
 
-    def test_cloudflare_bypass_ua(self):
-        session = _make_session(
+    def test_cloudflare_bypass_ua(self, make_entry, make_session):
+        session = make_session(
             "10.0.0.1", "cf-worker/1.0",
-            [_make_entry(ip="10.0.0.1", url="/api", user_agent="cf-worker/1.0")]
+            [make_entry(ip="10.0.0.1", url="/api", user_agent="cf-worker/1.0")]
         )
         label, conf, reason = label_session(session)
         assert label == 'bot'
         assert conf >= 0.85
         assert 'Cloudflare' in reason
 
-    def test_incapsula_ua(self):
-        session = _make_session(
+    def test_incapsula_ua(self, make_entry, make_session):
+        session = make_session(
             "10.0.0.1", "Incapsula-Inspector",
-            [_make_entry(ip="10.0.0.1", url="/api", user_agent="Incapsula-Inspector")]
+            [make_entry(ip="10.0.0.1", url="/api", user_agent="Incapsula-Inspector")]
         )
         label, conf, _reason = label_session(session)
         assert label == 'bot'
         assert conf >= 0.85
 
-    def test_cloudflare_protected_endpoint_no_referrer(self):
+    def test_cloudflare_protected_endpoint_no_referrer(self, make_entry, make_session):
         entries = []
         for i in range(15):
-            entries.append(_make_entry(
+            entries.append(make_entry(
                 ip="10.0.0.1",
                 url=f"/wp-admin?page={i}",
                 user_agent="SomeCustomTool/1.0",
                 referer="-",
             ))
-        session = _make_session("10.0.0.1", "SomeCustomTool/1.0", entries)
+        session = make_session("10.0.0.1", "SomeCustomTool/1.0", entries)
         label, _conf, _reason = label_session(session)
         # Should be caught by either WAF or scanner pattern
         assert label == 'bot'
@@ -93,31 +66,31 @@ class TestCloudflareWAF:
 class TestAPIKeyPatterns:
     """Tests for API key scanning detection."""
 
-    def test_api_key_url_scan(self):
+    def test_api_key_url_scan(self, make_entry, make_session):
         entries = []
         for i in range(15):
-            entries.append(_make_entry(
+            entries.append(make_entry(
                 ip="10.0.0.1",
                 url=f"/api/v1?key=test{i}&token=x",
                 user_agent="python-requests/2.28.0",
             ))
-        session = _make_session("10.0.0.1", "python-requests/2.28.0", entries)
+        session = make_session("10.0.0.1", "python-requests/2.28.0", entries)
         label, conf, _reason = label_session(session)
         assert label == 'bot'
         # Should be caught by either API key or bot UA
         assert conf >= 0.70
 
-    def test_credential_brute_force(self):
+    def test_credential_brute_force(self, make_entry, make_session):
         entries = []
         base_time = datetime(2023, 3, 24, 17, 0, 0, tzinfo=timezone.utc)
         for i in range(15):
-            entries.append(_make_entry(
+            entries.append(make_entry(
                 ip="10.0.0.1",
                 timestamp=base_time + timedelta(seconds=i * 2),
                 url="/wp-login.php",
                 user_agent="Mozilla/5.0",
             ))
-        session = _make_session("10.0.0.1", "Mozilla/5.0", entries)
+        session = make_session("10.0.0.1", "Mozilla/5.0", entries)
         label, _conf, _reason = label_session(session)
         assert label == 'bot'
 
@@ -134,66 +107,66 @@ class TestAPIKeyPatterns:
 class TestBotnetSignatures:
     """Tests for botnet and attack tool detection."""
 
-    def test_attack_tool_ua(self):
-        session = _make_session(
+    def test_attack_tool_ua(self, make_entry, make_session):
+        session = make_session(
             "10.0.0.1", "Nuclei - Open-source project",
-            [_make_entry(ip="10.0.0.1", url="/vuln", user_agent="Nuclei - Open-source project")]
+            [make_entry(ip="10.0.0.1", url="/vuln", user_agent="Nuclei - Open-source project")]
         )
         label, conf, _reason = label_session(session)
         assert label == 'bot'
         assert conf >= 0.85
 
-    def test_mirai_iot_scan(self):
+    def test_mirai_iot_scan(self, make_entry, make_session):
         entries = []
         for i in range(20):
-            entries.append(_make_entry(
+            entries.append(make_entry(
                 ip="185.220.101.1",
                 url="/shell.cgi" if i % 3 == 0 else "/HNAP1" if i % 3 == 1 else "/omega.cgi",
                 user_agent="Go-http-client/1.1",
             ))
-        session = _make_session("185.220.101.1", "Go-http-client/1.1", entries)
+        session = make_session("185.220.101.1", "Go-http-client/1.1", entries)
         label, _conf, _reason = label_session(session)
         assert label == 'bot'
 
-    def test_directory_brute_force(self):
+    def test_directory_brute_force(self, make_entry, make_session):
         entries = []
         base_time = datetime(2023, 3, 24, 17, 0, 0, tzinfo=timezone.utc)
         dirs = ["/admin", "/backup", "/config", "/debug", "/env", "/git",
                 "/hidden", "/private", "/secret", "/test", "/tmp",
                 "/wp-admin", "/phpmyadmin", "/.env", "/config.json"]
         for i in range(32):
-            entries.append(_make_entry(
+            entries.append(make_entry(
                 ip="91.189.88.162",
                 timestamp=base_time + timedelta(seconds=i * 0.1),
                 url=dirs[i % len(dirs)],
                 status=403 if i % 2 == 0 else 404,
                 user_agent="Go-http-client/1.1",
             ))
-        session = _make_session("91.189.88.162", "Go-http-client/1.1", entries)
+        session = make_session("91.189.88.162", "Go-http-client/1.1", entries)
         label, _conf, _reason = label_session(session)
         assert label == 'bot'
 
-    def test_ua_rotation(self):
+    def test_ua_rotation(self, make_entry, make_session):
         entries = []
         base_time = datetime(2023, 3, 24, 17, 0, 0, tzinfo=timezone.utc)
         for i in range(20):
-            entries.append(_make_entry(
+            entries.append(make_entry(
                 ip="10.0.0.1",
                 timestamp=base_time + timedelta(seconds=i),
                 url=f"/page/{i}",
                 user_agent=f"Bot{i}/1.0",
             ))
-        session = _make_session("10.0.0.1", "Bot0/1.0", entries)
+        session = make_session("10.0.0.1", "Bot0/1.0", entries)
         label, _conf, _reason = label_session(session)
         assert label == 'bot'
 
-    def test_single_request_not_flagged_as_ua_rotation(self):
+    def test_single_request_not_flagged_as_ua_rotation(self, make_entry, make_session):
         # A session with 1 request has exactly 1 UA variant — there's
         # nothing to "rotate" between. min(10, request_count * 0.3) drops
         # below 1 for request_count in {1, 2, 3}, so any non-empty UA set
         # (always >= 1) incorrectly satisfied `len(ua_variants) > threshold`.
-        entries = [_make_entry(user_agent="Mozilla/5.0 Chrome/120.0.0.0")]
-        session = _make_session("192.168.1.5", "Mozilla/5.0 Chrome/120.0.0.0", entries)
+        entries = [make_entry(user_agent="Mozilla/5.0 Chrome/120.0.0.0")]
+        session = make_session("192.168.1.5", "Mozilla/5.0 Chrome/120.0.0.0", entries)
         is_bot, reason = _check_botnet_signatures(session)
         assert is_bot is False
         assert reason == ''
@@ -218,18 +191,18 @@ class TestBotnetSignatures:
 class TestHumanSignals:
     """Tests for human traffic detection."""
 
-    def test_known_browser_normal_session(self):
+    def test_known_browser_normal_session(self, make_entry, make_session):
         entries = []
         base_time = datetime(2023, 3, 24, 17, 0, 0, tzinfo=timezone.utc)
         for i in range(10):
-            entries.append(_make_entry(
+            entries.append(make_entry(
                 ip="192.168.1.1",
                 timestamp=base_time + timedelta(seconds=i * 3 + (i % 3)),
                 url=f"/page/{i}",
                 referer=f"https://example.com/page/{i-1}" if i > 0 else "https://example.com",
                 user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             ))
-        session = _make_session(
+        session = make_session(
             "192.168.1.1",
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             entries,
@@ -237,19 +210,19 @@ class TestHumanSignals:
         label, _conf, _reason = label_session(session)
         assert label == 'human'
 
-    def test_variable_timing_human(self):
+    def test_variable_timing_human(self, make_entry, make_session):
         entries = []
         base_time = datetime(2023, 3, 24, 17, 0, 0, tzinfo=timezone.utc)
         # Very variable timing
         delays = [0.5, 5.0, 0.2, 10.0, 0.3, 8.0, 0.1, 3.0, 7.0, 0.4]
         for i, delay in enumerate(delays):
-            entries.append(_make_entry(
+            entries.append(make_entry(
                 ip="192.168.1.1",
                 timestamp=base_time + timedelta(seconds=sum(delays[:i])),
                 url=f"/page/{i}",
                 user_agent="Mozilla/5.0 Chrome/120.0.0.0",
             ))
-        session = _make_session(
+        session = make_session(
             "192.168.1.1",
             "Mozilla/5.0 Chrome/120.0.0.0",
             entries,
@@ -270,19 +243,19 @@ class TestEdgeCases:
         assert label == 'human'
         assert conf == 0.5
 
-    def test_single_request(self):
-        session = _make_session(
+    def test_single_request(self, make_entry, make_session):
+        session = make_session(
             "10.0.0.1", "python-requests/2.28.0",
-            [_make_entry(ip="10.0.0.1", user_agent="python-requests/2.28.0")]
+            [make_entry(ip="10.0.0.1", user_agent="python-requests/2.28.0")]
         )
         label, _conf, _reason = label_session(session)
         assert label == 'bot'
 
-    def test_label_entries_batch(self):
+    def test_label_entries_batch(self, make_entry):
         entries = []
         base_time = datetime(2023, 3, 24, 17, 0, 0, tzinfo=timezone.utc)
         for i in range(20):
-            entries.append(_make_entry(
+            entries.append(make_entry(
                 ip="192.168.1.1",
                 timestamp=base_time + timedelta(seconds=i),
                 url=f"/page/{i}",

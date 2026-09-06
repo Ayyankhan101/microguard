@@ -1,9 +1,12 @@
 """Tests for the watch module."""
 
+import threading
+import time
 from datetime import datetime, timezone
 
+from microguard.cli import DEFAULT_MODEL_PATH
 from microguard.parser import LogEntry
-from microguard.watch import _format_detection, _read_new_lines
+from microguard.watch import _format_detection, _read_new_lines, watch_logfile
 
 NGINX_LINE = (
     '192.168.1.100 - - [24/Mar/2023:17:07:41 +0000] '
@@ -119,6 +122,81 @@ class TestFormatDetection:
         assert "192.168.1.1" in output
         assert "SAFE" in output or "LOW" in output
         assert "Mozilla" in output
+
+
+def _graphql_lines(ip="10.1.1.1"):
+    """25 legitimate GraphQL calls — single endpoint, browser UA.
+
+    Same regression fixture shape as test_cli.py's, adapted for watch
+    mode's own (separate, duplicated) score-blending implementation.
+    """
+    ua = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+          "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+    lines = []
+    for i in range(25):
+        second = int(i * 2.3) % 60
+        minute = 12 * 60 + int(i * 2.3) // 60
+        ts = f"24/Mar/2024:{minute // 60:02d}:{minute % 60:02d}:{second:02d} +0000"
+        lines.append(
+            f'{ip} - - [{ts}] "POST /graphql HTTP/1.1" 200 512 '
+            f'"https://app.example.com/" "{ua}"'
+        )
+    return lines
+
+
+class TestWatchLogfile:
+    """End-to-end tests for the watch loop's orchestration and scoring.
+
+    watch_logfile() blocks in a `while True` tailing loop — these tests
+    append to the watched file from a background thread while the loop
+    runs, bounded by `_max_iterations` (a test-only seam) instead of
+    relying on KeyboardInterrupt.
+    """
+
+    def _run_with_append(self, log_file, lines, **kwargs):
+        def append_later():
+            time.sleep(0.05)
+            with open(log_file, 'a') as f:
+                f.write("\n".join(lines) + "\n")
+
+        t = threading.Thread(target=append_later)
+        t.start()
+        watch_logfile(
+            str(log_file), model_path=DEFAULT_MODEL_PATH,
+            interval=0.02, _max_iterations=15, **kwargs,
+        )
+        t.join()
+
+    def test_detects_and_prints_obvious_bot(self, tmp_path, capsys):
+        log_file = tmp_path / "watch.log"
+        log_file.write_text("")
+        self._run_with_append(log_file, [NGINX_BOT])
+        output = capsys.readouterr().out
+        assert "10.0.0.1" in output
+        assert "python-requests" in output
+
+    def test_score_blending_symmetry_graphql_not_flagged(self, tmp_path, capsys):
+        """Regression test: watch.py has its own copy of the heuristic<->model
+        score-blending logic (duplicated from cli.py, same asymmetry bug
+        found and fixed there this session). A GraphQL session must not be
+        printed as a bot detection — human sessions produce no per-entry
+        print at all, so the IP should not appear in output."""
+        log_file = tmp_path / "watch.log"
+        log_file.write_text("")
+        self._run_with_append(log_file, _graphql_lines(ip="10.1.1.1"))
+        output = capsys.readouterr().out
+        assert "10.1.1.1" not in output
+
+    def test_stops_after_max_iterations_without_keyboard_interrupt(self, tmp_path):
+        log_file = tmp_path / "watch.log"
+        log_file.write_text("")
+        # Must return on its own — no KeyboardInterrupt raised, no hang.
+        watch_logfile(str(log_file), interval=0.01, _max_iterations=3)
+
+    def test_missing_file_at_start_does_not_crash(self, tmp_path, capsys):
+        log_file = tmp_path / "does-not-exist.log"
+        watch_logfile(str(log_file), interval=0.01, _max_iterations=2)
+        assert "not found" in capsys.readouterr().err.lower()
 
 
 # Use the same constant that was defined above

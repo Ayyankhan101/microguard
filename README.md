@@ -246,12 +246,23 @@ requests to one endpoint" (0.80) and "high request rate" (0.75) need the model
 to agree. Those weaker rules also describe a legitimate polling client or a
 single-endpoint GraphQL app, which is why they do not get to block on their own.
 
-Both middleware take `trust_forwarded_for=False` by default: the client IP comes
-from `X-Real-IP` (proxy-set) or the transport peer address, never from the
-client-supplied `X-Forwarded-For`. Set `trust_forwarded_for=True` (or pass
-`--trust-forwarded-for` to `microguard serve`) only when a proxy in front of you
-overwrites that header, otherwise a bot can rotate it to get a fresh session on
-every request.
+**Full documentation:** [tutorial](docs/tutorial-real-time-blocking.md) ·
+[deploy behind nginx](docs/howto-deploy-behind-nginx.md) ·
+[deploy in-process](docs/howto-deploy-in-process.md) ·
+[tune blocking](docs/howto-tune-blocking.md) ·
+[API reference](docs/reference-live-api.md) ·
+[how it works](docs/explanation-how-blocking-works.md)
+
+Two settings matter before you deploy:
+
+- **`trust_forwarded_for` is off by default.** The client IP comes from
+  `X-Real-IP` or the transport peer, never from the client-supplied
+  `X-Forwarded-For`. Sessions key on that IP, so a spoofable value lets a bot get
+  a fresh session per request and never build a detectable history. Turn it on
+  only behind a proxy that overwrites the header.
+- **The block threshold defaults to 0.85.** Only the highest-confidence rules
+  block on their own; weaker signals need the model to agree. See
+  [tuning](docs/howto-tune-blocking.md).
 
 If Redis is unreachable, all three entrypoints fail open: the request is allowed
 and logged rather than turned into a 500 for a real visitor.

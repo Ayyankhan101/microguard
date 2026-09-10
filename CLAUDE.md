@@ -13,6 +13,8 @@ Bot Traffic Audit Tool powered by micrograd. Detects malicious bot traffic in AP
   - `scanner.py` — HTTP scanner for live probing
   - `report.py` — Terminal + JSON + HTML output
   - `training/` — Training pipeline
+- `docs/` — Diataxis documentation for the live blocking path
+  (tutorial / how-to / reference / explanation)
 - `tests/` — pytest tests (69 passing)
 - `data/` — Model weights, sample logs
 

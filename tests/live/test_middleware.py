@@ -301,3 +301,21 @@ class TestWSGIMiddleware:
         # Verify the scorer used the XFF IP (session should exist for 10.0.0.99)
         session = store.get("live:10.0.0.99")
         assert session is not None
+
+
+# --- Constructor signature ---
+
+
+class TestConstructorRejectsUnknownKwargs:
+    """A mistyped knob must fail loudly, not fall back to the default threshold."""
+
+    def test_asgi_rejects_unknown_kwarg(self):
+        async def app(scope, receive, send):
+            pass
+
+        with pytest.raises(TypeError):
+            MicroguardASGI(app, block_treshold=0.5)  # typo, must not be swallowed
+
+    def test_wsgi_rejects_unknown_kwarg(self):
+        with pytest.raises(TypeError):
+            MicroguardWSGI(_dummy_wsgi_app, block_treshold=0.5)

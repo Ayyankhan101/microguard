@@ -43,7 +43,6 @@ class MicroguardASGI:
         redis_url: str = "redis://localhost:6379",
         block_threshold: float = 0.85,
         session_ttl: int = 1800,
-        **kwargs: Any,
     ):
         self.app = app
         self._r = redis.Redis.from_url(redis_url, decode_responses=True)
@@ -116,7 +115,6 @@ class MicroguardWSGI:
         redis_url: str = "redis://localhost:6379",
         block_threshold: float = 0.85,
         session_ttl: int = 1800,
-        **kwargs: Any,
     ):
         self.app = app
         self._r = redis.Redis.from_url(redis_url, decode_responses=True)

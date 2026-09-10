@@ -8,9 +8,7 @@ from microguard.parser import LogEntry
 from microguard.features import _url_depth, _url_width
 from microguard.training.groundtruth import GroundTruthRule, label_line
 from microguard.live.middleware import MicroguardASGI, MicroguardWSGI
-from microguard.live.redis_store import RedisSessionStateStore
 from microguard.live.server import CheckHandler
-from microguard.live.state import SessionStateStore
 
 BotDetector.sigmoid
 LogEntry.to_dict
@@ -28,13 +26,9 @@ MicroguardWSGI
 CheckHandler.do_GET
 CheckHandler.log_message
 
-# Scored-session API: exercised in tests/live/test_redis_store.py.
-RedisSessionStateStore.incr_score
-RedisSessionStateStore.get_score
-
-# Protocol declarations — bodies are `...` by design.
-SessionStateStore.incr_score
-SessionStateStore.get_score
+# socketserver.ThreadingMixIn reads self.daemon_threads in process_request;
+# run_server only writes it, so vulture sees a write with no read.
+_.daemon_threads
 
 # NoRedirect.redirect_request is a nested class inside scanner.probe_url,
 # so it can't be imported here — reference it via attribute access instead.

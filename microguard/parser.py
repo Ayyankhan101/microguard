@@ -65,6 +65,13 @@ class LogEntry:
         self.raw_line = raw_line
     
     def to_dict(self) -> dict[str, Any]:
+        """Serialize to a JSON-safe dict. Round-trips via from_dict().
+
+        This is the ONE serialization of a LogEntry. The live Redis store used
+        to keep its own inline copy because this method dropped `raw_line`,
+        which labeler.py needs to spot clients that only speak HTTP/1.0 — two
+        codecs for one type, with nothing keeping them in step.
+        """
         return {
             'ip': self.ip,
             'timestamp': self.timestamp.isoformat(),
@@ -74,7 +81,29 @@ class LogEntry:
             'size': self.size,
             'referer': self.referer,
             'user_agent': self.user_agent,
+            'raw_line': self.raw_line,
         }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "LogEntry":
+        """Rebuild from a to_dict() payload.
+
+        `raw_line` is optional so payloads written before it round-tripped
+        still load; everything else is required, because a missing field there
+        would silently change a feature value rather than fail.
+        """
+        return cls(
+            ip=data['ip'],
+            timestamp=datetime.fromisoformat(data['timestamp']),
+            method=data['method'],
+            url=data['url'],
+            status=data['status'],
+            size=data['size'],
+            referer=data['referer'],
+            user_agent=data['user_agent'],
+            raw_line=data.get('raw_line', ''),
+        )
+
     
     def __repr__(self):
         return f"LogEntry({self.method} {self.url} {self.status} from {self.ip})"

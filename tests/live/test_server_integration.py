@@ -22,6 +22,27 @@ def _free_port():
         return s.getsockname()[1]
 
 
+def _wait_until_listening(proc, port, timeout=15.0):
+    """Poll until the server accepts a connection.
+
+    A flat sleep was flaky: under a full-suite run the subprocess sometimes
+    needed longer than the fixed wait, and the first test in the module failed
+    in a way that looked like a scoring bug rather than a startup race.
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if proc.poll() is not None:
+            raise RuntimeError(
+                f"check server exited early with code {proc.returncode}"
+            )
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=0.25):
+                return
+        except OSError:
+            time.sleep(0.05)
+    raise RuntimeError(f"check server did not start listening on {port} in {timeout}s")
+
+
 @pytest.fixture(scope="module")
 def redis_client():
     try:
@@ -48,7 +69,7 @@ def server(redis_client):
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
     )
-    time.sleep(1.5)  # wait for startup
+    _wait_until_listening(proc, port)
     yield {"proc": proc, "port": port, "redis": redis_client}
     proc.terminate()
     proc.wait(timeout=5)
@@ -141,3 +162,75 @@ class TestCheckServer:
         resp = urllib.request.urlopen(req)
         assert resp.status == 200
         # The scorer should have used 10.0.2.99 as the client IP
+
+
+class TestConcurrentRequests:
+    """The check server sits inline in front of every request to the protected
+    site, so it must serve concurrently and stay correct while doing it."""
+
+    def test_concurrent_requests_from_distinct_ips_are_all_answered(self, server):
+        import concurrent.futures
+
+        server["redis"].flushdb()
+        ips = [f"10.20.0.{i}" for i in range(1, 25)]
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=len(ips)) as pool:
+            results = list(
+                pool.map(
+                    lambda ip: _check(
+                        server["port"], ip=ip, ua="Mozilla/5.0", url="/products/1"
+                    ),
+                    ips,
+                )
+            )
+
+        assert len(results) == len(ips)
+        assert all(status == 200 for status, _ in results), [s for s, _ in results]
+        # each IP got its own session, not a shared one
+        assert all(body["request_count"] == 1 for _, body in results)
+
+    def test_concurrent_requests_from_one_ip_all_accumulate(self, server):
+        """Redis does the appending atomically, so nothing is lost even when
+        every thread reads and writes the same session key."""
+        import concurrent.futures
+
+        server["redis"].flushdb()
+        n = 20
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=n) as pool:
+            list(
+                pool.map(
+                    lambda i: _check(
+                        server["port"], ip="10.21.0.1", ua="Mozilla/5.0", url=f"/p/{i}"
+                    ),
+                    range(n),
+                )
+            )
+
+        _status, body = _check(
+            server["port"], ip="10.21.0.1", ua="Mozilla/5.0", url="/p/final"
+        )
+        assert body["request_count"] == n + 1
+
+    def test_a_slow_request_does_not_block_others(self, server):
+        """A plain HTTPServer answers one connection at a time; this asserts we
+        are not on one. Two requests issued together must overlap rather than
+        run end to end."""
+        import concurrent.futures
+        import time
+
+        server["redis"].flushdb()
+        started: list[float] = []
+
+        def timed(ip):
+            started.append(time.perf_counter())
+            return _check(server["port"], ip=ip, ua="Mozilla/5.0", url="/x")
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+            t0 = time.perf_counter()
+            list(pool.map(timed, [f"10.22.0.{i}" for i in range(8)]))
+            elapsed = time.perf_counter() - t0
+
+        # 8 requests, each a Redis round trip plus a model forward pass.
+        # Generous ceiling — this catches serialization, not slow hardware.
+        assert elapsed < 5.0, f"8 concurrent checks took {elapsed:.2f}s"

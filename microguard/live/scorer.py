@@ -7,34 +7,47 @@ against accumulated session history.
 
 from __future__ import annotations
 
+import json
+import logging
 from pathlib import Path
 
 from ..features import extract_features
 from ..labeler import label_session
-from ..model import BotDetector
+from ..model import DEFAULT_MODEL_PATH, BotDetector
 from ..parser import LogEntry
-from ..scoring import compute_combined_score
-from .state import LiveSession, SessionStateStore
+from ..scoring import BLOCK_THRESHOLD_DEFAULT, compute_combined_score
+from .state import SessionStateStore
+
+logger = logging.getLogger(__name__)
+
 
 
 def _load_model(model_path: str | Path | None = None) -> BotDetector | None:
-    """Load trained model, returning None if unavailable."""
+    """Load the trained model, returning None if it cannot be loaded.
+
+    A None here is not benign: score_request falls back to model_score = 0.0,
+    which collapses the blend to the heuristic confidence alone and takes the
+    model out of every live blocking decision. That went unnoticed once already
+    because this function searched for a filename that never existed in the
+    repo and said nothing when it came up empty. Every failure path now logs.
+    """
     if model_path is None:
-        candidates = [
-            Path("data/bot_model.pkl"),
-            Path(__file__).parent.parent.parent / "data" / "bot_model.pkl",
-        ]
-        for p in candidates:
-            if p.exists():
-                model_path = p
-                break
-    if model_path is None or not Path(model_path).exists():
+        model_path = DEFAULT_MODEL_PATH
+    if not Path(model_path).exists():
+        logger.warning(
+            "no model at %s - live scoring will run on heuristics only", model_path
+        )
         return None
     try:
         detector = BotDetector()
         detector.load(str(model_path))
         return detector
-    except (FileNotFoundError, OSError, KeyError):
+    except (FileNotFoundError, OSError, KeyError, ValueError, json.JSONDecodeError):
+        logger.warning(
+            "model at %s failed to load - live scoring will run on heuristics only",
+            model_path,
+            exc_info=True,
+        )
         return None
 
 
@@ -54,45 +67,69 @@ class LiveScorer:
         self,
         store: SessionStateStore,
         model_path: str | Path | None = None,
-        block_threshold: float = 0.85,
+        block_threshold: float = BLOCK_THRESHOLD_DEFAULT,
         session_ttl: int = 1800,
-        short_circuit_ua: str = "automated-integration",
+        short_circuit_label: str = "automated-integration",
     ):
         self._store = store
         self._model = _load_model(model_path)
         self._block_threshold = block_threshold
         self._session_ttl = session_ttl
-        self._short_circuit_ua = short_circuit_ua
+        self._short_circuit_label = short_circuit_label
+
+    @property
+    def model_loaded(self) -> bool:
+        """Whether scores include a model contribution at all."""
+        return self._model is not None
 
     def score_request(self, entry: LogEntry) -> dict:
         """Score a single request against accumulated session state.
 
-        Returns:
-            {
-                "label": "bot" | "human",
-                "score": float,
-                "reason": str,
-                "request_count": int,
-            }
-        """
-        session = self._store.get(f"live:{entry.ip}")
-        if session is None:
-            session = LiveSession(ip=entry.ip, user_agent=entry.user_agent)
+        Returns the full decision, not just the verdict:
 
-        session.add_request(entry)
-        self._store.set(f"live:{entry.ip}", session, ttl_seconds=self._session_ttl)
+            {
+                "ip": str,
+                "label": "bot" | "human",
+                "score": float,           # the blended score the decision used
+                "model_score": float,     # what the model alone said
+                "heuristic_label": str,   # what the rules alone said
+                "heuristic_confidence": float,
+                "heuristic_reason": str,
+                "request_count": int,
+                "duration": float,        # seconds spanned by retained history
+                "model_loaded": bool,
+            }
+
+        The breakdown is the point. A single blended float tells an operator
+        that a customer was blocked but not whether the rules or the model
+        drove it, which is exactly what you need to tune a threshold. It is
+        also how a dead model stays visible: model_score pinned at 0.0 across
+        every response is a symptom you can see.
+        """
+        # One atomic call: append, cap, refresh TTL, and read back the session
+        # to score. The old get/mutate/set pair lost concurrent appends from
+        # the same actor, which undercounted request_count under exactly the
+        # load the rate and timing rules are there to catch.
+        session = self._store.record_request(
+            entry.ip,
+            entry.user_agent,
+            entry,
+            ttl_seconds=self._session_ttl,
+        )
 
         h_label, h_conf, h_reason = label_session(session)  # type: ignore[arg-type]
 
         # Short-circuit for automated integrations
-        if h_label == self._short_circuit_ua:
-            self._store.set(f"live:{entry.ip}", session, ttl_seconds=self._session_ttl)
-            return {
-                "label": "human",
-                "score": 0.0,
-                "reason": f"automated-integration (not blocked): {h_reason}",
-                "request_count": session.request_count,
-            }
+        if h_label == self._short_circuit_label:
+            return self._result(
+                session,
+                label="human",
+                score=0.0,
+                model_score=0.0,
+                h_label=h_label,
+                h_conf=h_conf,
+                h_reason=f"automated-integration (not blocked): {h_reason}",
+            )
 
         # Model prediction (if available)
         if self._model is not None:
@@ -102,14 +139,47 @@ class LiveScorer:
             model_score = 0.0
 
         combined = compute_combined_score(h_label, h_conf, model_score)
-        label = "bot" if combined >= self._block_threshold else "human"
+        # A score sitting exactly on the bar has not cleared it. At a 0.5
+        # threshold that number is the neutral verdict itself ("no strong
+        # signals either way" caps at exactly 0.5), and spec AC#7 says an
+        # unknown visitor with no history is allowed by default. Strict `>`
+        # also makes threshold 1.0 a real never-block escape hatch.
+        label = "bot" if combined > self._block_threshold else "human"
 
-        session.last_score = combined
-        self._store.set(f"live:{entry.ip}", session, ttl_seconds=self._session_ttl)
+        return self._result(
+            session,
+            label=label,
+            score=combined,
+            model_score=model_score,
+            h_label=h_label,
+            h_conf=h_conf,
+            h_reason=h_reason,
+        )
 
+    def _result(
+        self,
+        session,
+        *,
+        label: str,
+        score: float,
+        model_score: float,
+        h_label: str,
+        h_conf: float,
+        h_reason: str,
+    ) -> dict:
+        """Assemble the decision payload. One place, so the short-circuit and
+        the scored path cannot report different shapes."""
         return {
+            "ip": session.ip,
             "label": label,
-            "score": combined,
-            "reason": h_reason,
+            "score": score,
+            "model_score": model_score,
+            "heuristic_label": h_label,
+            "heuristic_confidence": h_conf,
+            "heuristic_reason": h_reason,
             "request_count": session.request_count,
+            "duration": session.duration,
+            "model_loaded": self.model_loaded,
+            # Kept for callers reading the old four-key shape.
+            "reason": h_reason,
         }

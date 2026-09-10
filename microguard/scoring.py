@@ -7,6 +7,20 @@ keeping their own inline copies.
 """
 
 
+# Score above which a request is blocked. Shared by the live scorer, the check
+# server, the middleware, and the `microguard serve` CLI so the four cannot
+# drift. It lives here, next to the blend it is compared against, and not in
+# live/ — importing live/ pulls in redis, and `microguard scan` must keep
+# working on a base install with no extras.
+#
+# 0.85 rather than the spec's 0.7: compute_combined_score floors a confident
+# heuristic 'bot' at its own confidence, and the labeler's bot rules sit at
+# 0.65-0.95. At 0.7 the 0.75 rules (high request rate) and 0.80 rules block on
+# their own; at 0.85 only the 0.90-0.95 rules do, and the model has to agree to
+# push anything weaker over the line.
+BLOCK_THRESHOLD_DEFAULT = 0.85
+
+
 def compute_combined_score(
     heuristic_label: str,
     heuristic_confidence: float,

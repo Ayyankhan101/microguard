@@ -165,9 +165,11 @@ class TestMainCLI:
 
     def _run(self, monkeypatch, argv):
         monkeypatch.setattr(sys, 'argv', ['microguard'] + argv)
-        with pytest.raises(SystemExit) as exc_info:
+        with pytest.raises((SystemExit, KeyboardInterrupt)) as exc_info:
             cli_module.main()
-        return exc_info.value.code
+        if isinstance(exc_info.value, SystemExit):
+            return exc_info.value.code
+        return 0
 
     def test_scan_exits_0_for_clean_traffic(self, monkeypatch, nginx_log_file, capsys):
         path = nginx_log_file(_graphql_session_lines())
@@ -271,3 +273,115 @@ class TestMainCLI:
 
         assert code == 0
         assert calls.get('filepath') == path
+
+    def test_serve_dispatches_to_run_server(self, monkeypatch):
+        calls = {}
+
+        def fake_run_server(**kwargs):
+            calls.update(kwargs)
+            raise KeyboardInterrupt()
+
+        monkeypatch.setattr('microguard.live.server.run_server', fake_run_server)
+        code = self._run(monkeypatch, ['serve'])
+        assert code == 0
+        assert 'host' in calls
+
+    def test_serve_custom_port(self, monkeypatch):
+        calls = {}
+
+        def fake_run_server(**kwargs):
+            calls.update(kwargs)
+            raise KeyboardInterrupt()
+
+        monkeypatch.setattr('microguard.live.server.run_server', fake_run_server)
+        code = self._run(monkeypatch, ['serve', '--port', '9000'])
+        assert code == 0
+        assert calls['port'] == 9000
+
+    def test_serve_custom_threshold(self, monkeypatch):
+        calls = {}
+
+        def fake_run_server(**kwargs):
+            calls.update(kwargs)
+            raise KeyboardInterrupt()
+
+        monkeypatch.setattr('microguard.live.server.run_server', fake_run_server)
+        code = self._run(monkeypatch, ['serve', '--block-threshold', '0.7'])
+        assert code == 0
+        assert calls['block_threshold'] == 0.7
+
+    def test_serve_custom_session_ttl(self, monkeypatch):
+        calls = {}
+
+        def fake_run_server(**kwargs):
+            calls.update(kwargs)
+            raise KeyboardInterrupt()
+
+        monkeypatch.setattr('microguard.live.server.run_server', fake_run_server)
+        code = self._run(monkeypatch, ['serve', '--session-ttl', '600'])
+        assert code == 0
+        assert calls['session_ttl'] == 600
+
+
+class TestBaseInstallImports:
+    """`pip install microguard` with no extras must keep working.
+
+    Spec AC#11. The live package raises ImportError without redis, so any
+    module-level import of microguard.live from cli.py breaks `microguard scan`
+    for every user who never asked for real-time mode. That is easy to do by
+    accident when reaching for a shared constant, and impossible to notice
+    locally with redis installed.
+    """
+
+    def test_cli_imports_without_redis(self):
+        import subprocess
+        import sys
+
+        probe = (
+            "import sys, builtins\n"
+            "_real = builtins.__import__\n"
+            "def blocked(name, *a, **k):\n"
+            "    if name == 'redis' or name.startswith('redis.'):\n"
+            "        raise ImportError('No module named redis')\n"
+            "    return _real(name, *a, **k)\n"
+            "builtins.__import__ = blocked\n"
+            "import microguard.cli\n"
+            "assert microguard.cli.BLOCK_THRESHOLD_DEFAULT\n"
+            "print('ok')\n"
+        )
+        result = subprocess.run(
+            [sys.executable, "-c", probe],
+            capture_output=True,
+            text=True,
+            check=False,  # the assertion below reports the failure with stderr
+        )
+        assert result.returncode == 0, (
+            "microguard.cli must import without the live extra:\n" + result.stderr
+        )
+
+    def test_live_package_still_guards(self):
+        """The flip side: importing live/ without redis must say what to install."""
+        import subprocess
+        import sys
+
+        probe = (
+            "import builtins\n"
+            "_real = builtins.__import__\n"
+            "def blocked(name, *a, **k):\n"
+            "    if name == 'redis' or name.startswith('redis.'):\n"
+            "        raise ImportError('No module named redis')\n"
+            "    return _real(name, *a, **k)\n"
+            "builtins.__import__ = blocked\n"
+            "try:\n"
+            "    import microguard.live\n"
+            "except ImportError as e:\n"
+            "    assert 'live' in str(e), e\n"
+            "    print('ok')\n"
+        )
+        result = subprocess.run(
+            [sys.executable, "-c", probe],
+            capture_output=True,
+            text=True,
+            check=False,  # the assertion below reports the failure with stderr
+        )
+        assert result.returncode == 0, result.stderr

@@ -26,7 +26,13 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -e .
+          # The live extra must be installed even where no Redis server runs:
+          # microguard/live/__init__.py raises ImportError without redis-py, and
+          # every tests/live/ module imports microguard.live at import time, so a
+          # base install turns the whole directory into a COLLECTION ERROR rather
+          # than a skip. The Redis-backed tests themselves skip cleanly without a
+          # server; the `live` job below provides one.
+          pip install -e ".[live,fastapi,flask]"
           pip install pytest pytest-cov
 
       - name: Run tests
@@ -51,3 +57,49 @@ jobs:
             exit 1
           fi
           echo "CLI ran successfully (exit code $code)"
+
+  live:
+    # Service containers need a Linux runner, so the Redis-backed suite runs
+    # here rather than across the full matrix. Without this job every test in
+    # tests/live/ skips and the session store ships unverified.
+    name: live (Redis-backed)
+    runs-on: ubuntu-latest
+
+    services:
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[live,fastapi,flask]"
+          pip install pytest
+
+      - name: Run live suite against a real Redis
+        run: python -m pytest tests/live/ -v --tb=short
+
+      - name: Fail if the live suite silently skipped
+        run: |
+          # A skipped Redis suite looks identical to a passing one in the
+          # summary. This job exists to run those tests, so treat a skip as
+          # a failure rather than a green check.
+          python -m pytest tests/live/ -q -rs 2>&1 | tee /tmp/live.txt
+          if grep -q "Redis not available" /tmp/live.txt; then
+            echo "::error::live suite skipped - the Redis service did not come up"
+            exit 1
+          fi

@@ -101,6 +101,13 @@ SINGLE_ENDPOINT_API_PATTERNS = [
 ]
 SINGLE_ENDPOINT_API_RE = re.compile('|'.join(SINGLE_ENDPOINT_API_PATTERNS), re.IGNORECASE)
 
+# Rule 7 (high request rate) divides request_count by session duration. Below
+# these floors the window is too narrow for the quotient to mean anything —
+# five requests spanning 1.5ms extrapolate to ~200,000 req/min, which is a
+# browser page load, not a flood.
+MIN_RATE_WINDOW_S = 1.0
+MIN_RATE_REQUESTS = 5
+
 # gRPC calls are routed as POST /package.Service/Method — two path segments,
 # method name capitalized by convention, no file extension.
 GRPC_PATH_RE = re.compile(r'^/[\w.]+/[A-Z]\w*$')
@@ -306,7 +313,13 @@ def label_session(session: Session) -> tuple[str, float, str]:
         return 'bot', 0.80, f'all {session.request_count} requests to same endpoint: {urls[0]}'
     
     # 7. High request rate (>50 req/min sustained)
-    if session.duration > 0:
+    # "Sustained" needs a window wide enough to mean something. A browser
+    # loading one page fires its subresource requests within a few
+    # milliseconds; dividing by that window extrapolates to six figures per
+    # minute and blocks a real visitor. Batch scans never hit this because
+    # nginx log timestamps are second-granular (duration == 0, rule skipped),
+    # but the live path uses time.time() and trips it on every page load.
+    if session.duration >= MIN_RATE_WINDOW_S and session.request_count >= MIN_RATE_REQUESTS:
         rate = session.request_count / (session.duration / 60.0)
         if rate > 50:
             return 'bot', 0.75, f'high request rate: {rate:.1f} req/min'

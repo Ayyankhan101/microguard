@@ -182,6 +182,10 @@ microguard serve --port 8400 --redis-url redis://localhost:6379
 #       proxy_set_header X-Original-Method $request_method;
 #       proxy_set_header X-Real-IP $remote_addr;
 #       proxy_set_header User-Agent $http_user_agent;
+#       # Drop client-supplied X-Forwarded-For. Sessions are keyed on the
+#       # client IP, so a spoofable value lets a bot get a fresh session
+#       # per request and never build a detectable history.
+#       proxy_set_header X-Forwarded-For "";
 #   }
 ```
 
@@ -210,6 +214,47 @@ app.wsgi_app = MicroguardWSGI(
     block_threshold=0.85,
 )
 ```
+
+Every block/allow decision returns the full breakdown, not just a verdict:
+
+```json
+{
+  "ip": "203.0.113.10",
+  "label": "bot",
+  "score": 0.95,
+  "model_score": 0.87,
+  "heuristic_label": "bot",
+  "heuristic_confidence": 0.95,
+  "heuristic_reason": "vulnerability scanner pattern detected",
+  "request_count": 4,
+  "duration": 1.82,
+  "model_loaded": true
+}
+```
+
+The same fields travel as `X-Microguard-Label`, `-Score`, `-Model-Score`,
+`-Heuristic` and `-Reason` headers, so an nginx `auth_request_set` or a wrapped
+app can forward them upstream. `score` is what the decision used; `model_score`
+and `heuristic_confidence` tell you which half drove it, which is what you need
+to tune the threshold or explain a block to a customer.
+
+The default block threshold is **0.85**. The blend floors a confident heuristic
+rule at its own confidence, so the threshold decides which rules can block
+unaided: at 0.85 only the 0.90-0.95 rules do (known bot UA, scanner paths,
+attack tools, uniform timing, HTTP/1.0-only), while weaker signals like "all
+requests to one endpoint" (0.80) and "high request rate" (0.75) need the model
+to agree. Those weaker rules also describe a legitimate polling client or a
+single-endpoint GraphQL app, which is why they do not get to block on their own.
+
+Both middleware take `trust_forwarded_for=False` by default: the client IP comes
+from `X-Real-IP` (proxy-set) or the transport peer address, never from the
+client-supplied `X-Forwarded-For`. Set `trust_forwarded_for=True` (or pass
+`--trust-forwarded-for` to `microguard serve`) only when a proxy in front of you
+overwrites that header, otherwise a bot can rotate it to get a fresh session on
+every request.
+
+If Redis is unreachable, all three entrypoints fail open: the request is allowed
+and logged rather than turned into a 500 for a real visitor.
 
 Install with: `pip install microguard[live,fastapi]` or `pip install microguard[live,flask]`
 

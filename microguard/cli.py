@@ -13,18 +13,14 @@ from typing import Any
 
 from .features import FEATURE_NAMES, extract_features, group_into_sessions
 from .labeler import label_session
-from .model import BotDetector
+from .model import DEFAULT_MODEL_PATH, BotDetector
 from .parser import LogEntry, parse_file
 from .report import print_report
-from .scoring import compute_combined_score
+from .scoring import BLOCK_THRESHOLD_DEFAULT, compute_combined_score
 
 # Default threshold for bot classification
 DEFAULT_THRESHOLD = 0.7
 
-# Path to pre-trained model (relative to package)
-DEFAULT_MODEL_PATH = os.path.join(
-    os.path.dirname(__file__), '..', 'data', 'model.json'
-)
 
 
 def _write_report(output_file: str, content: str) -> None:
@@ -57,6 +53,8 @@ def scan_logfile(
     Returns:
         Dictionary with scan results
     """
+    from collections import Counter
+    
     # Parse log file
     print(f"📂 Parsing {filepath}...", file=sys.stderr)
 
@@ -141,7 +139,6 @@ def scan_logfile(
                 human_count += 1
 
         # Get top endpoint
-        from collections import Counter
         urls = [e.url.split('?')[0] for e in session.requests]
         top_endpoint = Counter(urls).most_common(1)[0][0] if urls else '?'
         
@@ -285,7 +282,7 @@ def main():
     serve_parser.add_argument(
         '--block-threshold',
         type=float,
-        default=0.85,
+        default=BLOCK_THRESHOLD_DEFAULT,
         help='Score above which requests are blocked (default: 0.85)'
     )
     serve_parser.add_argument(
@@ -293,6 +290,13 @@ def main():
         type=int,
         default=1800,
         help='Session expiry in seconds (default: 1800)'
+    )
+    serve_parser.add_argument(
+        '--trust-forwarded-for',
+        action='store_true',
+        help='Honor X-Forwarded-For for client IP. Only enable behind a proxy '
+             'that overwrites it — the header is client-supplied, and a '
+             'spoofable session key defeats detection.'
     )
 
     # probe command
@@ -484,19 +488,9 @@ def main():
 
         from .scanner import format_probe_report, probe_and_analyze
 
-        # Load model
-        model = None
-        model_available = os.path.exists(args.model)
-        if model_available:
-            try:
-                model = BotDetector(args.model)
-            except Exception as e:  # noqa: BLE001 — model load is best-effort, falls back to heuristics
-                print(f"⚠️  Could not load model: {e}", file=sys.stderr)
-
         # Run probe analysis
         results = probe_and_analyze(
             url=args.url,
-            model=model,
             count=args.count,
             delay=args.delay,
             threshold=args.threshold,
@@ -505,8 +499,8 @@ def main():
 
         # Format and output
         if args.verbose:
-            from .scanner import format_probe_verbose
-            content = format_probe_verbose(results)
+            from .scanner import format_probe_report
+            content = format_probe_report(results, verbose=True)
         elif args.json_pretty:
             from .report import format_json_pretty
             content = format_json_pretty(results)
@@ -537,6 +531,7 @@ def main():
             redis_url=args.redis_url,
             block_threshold=args.block_threshold,
             session_ttl=args.session_ttl,
+            trust_forwarded_for=args.trust_forwarded_for,
         )
 
     elif args.command == 'info':

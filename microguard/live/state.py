@@ -27,9 +27,14 @@ class LiveSession:
     ip: str
     user_agent: str = ""
     requests: list[LogEntry] = field(default_factory=list)
+    # Float epochs, NOT datetimes. features.Session keeps the same two names as
+    # datetimes taken from entry.timestamp; both expose a float .duration, so
+    # the two shapes duck-type. Anything rebuilding a LiveSession from stored
+    # entries must convert with .timestamp() — a raw datetime here makes
+    # .duration return a timedelta and breaks labeler.py's MIN_RATE_WINDOW_S
+    # comparison.
     start_time: float | None = None  # time.time() epoch
     end_time: float | None = None
-    last_score: float | None = None
 
     def add_request(self, entry: LogEntry) -> None:
         """Add a request to the session."""
@@ -54,29 +59,29 @@ class LiveSession:
 class SessionStateStore(Protocol):
     """Protocol for session state backends.
 
+    One write method, deliberately. An earlier get()/set() pair forced callers
+    into a read-modify-write across two round trips, which lost concurrent
+    appends from the same actor: a 20-thread test against real Redis kept only
+    9 of 20 requests. Recording and reading back must happen in one atomic
+    operation, so they are one method.
+
     Implementations must be thread-safe and support TTL-based expiry.
     """
 
-    def get(self, key: str) -> LiveSession | None:
-        """Return the session for key, or None if expired/absent."""
+    def record_request(
+        self,
+        ip: str,
+        user_agent: str,
+        entry: LogEntry,
+        ttl_seconds: int | None = None,
+    ) -> LiveSession:
+        """Atomically append entry to this actor's session and return it.
+
+        Creates the session if absent, refreshes its TTL, and caps its history.
+        The returned session is the post-append state, ready to score.
+        """
         ...
 
-    def set(self, key: str, session: LiveSession, ttl_seconds: int = 1800) -> None:
-        """Store a session with TTL."""
-        ...
-
-    def delete(self, key: str) -> None:
+    def delete(self, ip: str) -> None:
         """Explicitly remove a session."""
-        ...
-
-    def incr_score(self, key: str, amount: float = 1.0) -> float:
-        """Atomically increment the score for a session, returning new value."""
-        ...
-
-    def get_score(self, key: str) -> float:
-        """Return the current score for a session, or 0.0 if absent."""
-        ...
-
-    def keys(self, pattern: str = "live:*") -> list[str]:
-        """Return keys matching the pattern."""
         ...

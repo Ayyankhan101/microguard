@@ -21,3 +21,4 @@ data/real_training_data.json
 data/dataverse/
 dataverse_files.zip
 data/probe_report.html
+.DS_Store

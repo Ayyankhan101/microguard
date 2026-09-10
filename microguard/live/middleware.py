@@ -18,6 +18,7 @@ Usage (Flask):
 from __future__ import annotations
 
 import json
+import logging
 from datetime import datetime, timezone
 from typing import Any
 
@@ -25,7 +26,24 @@ import redis
 
 from ..parser import LogEntry
 from .redis_store import RedisSessionStateStore
-from .scorer import LiveScorer
+from .scorer import BLOCK_THRESHOLD_DEFAULT, LiveScorer
+
+logger = logging.getLogger(__name__)
+
+# Same shape as a real decision, so downstream consumers never special-case it.
+_FAIL_OPEN = {
+    "ip": "",
+    "label": "human",
+    "score": 0.0,
+    "model_score": 0.0,
+    "heuristic_label": "unknown",
+    "heuristic_confidence": 0.0,
+    "heuristic_reason": "scoring unavailable",
+    "reason": "scoring unavailable",
+    "request_count": 0,
+    "duration": 0.0,
+    "model_loaded": False,
+}
 
 # --- ASGI Middleware (FastAPI / Starlette) ---
 
@@ -34,17 +52,22 @@ class MicroguardASGI:
     """ASGI middleware for real-time bot detection.
 
     Constructor args match `microguard serve` flags:
-        redis_url, block_threshold, session_ttl
+        redis_url, block_threshold, session_ttl, trust_forwarded_for
     """
+
+    # Class-level default so instances built without __init__ still resolve it.
+    _trust_xff: bool = False
 
     def __init__(
         self,
         app: Any,
         redis_url: str = "redis://localhost:6379",
-        block_threshold: float = 0.85,
+        block_threshold: float = BLOCK_THRESHOLD_DEFAULT,
         session_ttl: int = 1800,
+        trust_forwarded_for: bool = False,
     ):
         self.app = app
+        self._trust_xff = trust_forwarded_for
         self._r = redis.Redis.from_url(redis_url, decode_responses=True)
         self._store = RedisSessionStateStore(self._r, default_ttl=session_ttl)
         self._scorer = LiveScorer(
@@ -60,7 +83,8 @@ class MicroguardASGI:
 
         # Extract request info from ASGI scope
         headers = dict(scope.get("headers", []))
-        ip = _extract_ip(headers)
+        client = scope.get("client") or ()
+        ip = _extract_ip(headers, self._trust_xff, client[0] if client else "")
         ua = _decode_header(headers.get(b"user-agent", b""))
         method = scope.get("method", "GET")
         path = scope.get("path", "/")
@@ -76,7 +100,12 @@ class MicroguardASGI:
             user_agent=ua,
         )
 
-        result = self._scorer.score_request(entry)
+        try:
+            result = self._scorer.score_request(entry)
+        except Exception:
+            # Fail open: a Redis outage must not 500 every request.
+            logger.exception("scoring failed, allowing request")
+            result = dict(_FAIL_OPEN)
 
         if result["label"] == "bot":
             body = json.dumps(result).encode()
@@ -84,18 +113,24 @@ class MicroguardASGI:
                 "type": "http.response.start",
                 "status": 403,
                 "headers": [
-                    [b"x-microguard-label", b"bot"],
-                    [b"x-microguard-score", str(result["score"]).encode()],
+                    *_score_headers_asgi(result),
                     [b"content-type", b"application/json"],
                     [b"content-length", str(len(body)).encode()],
                 ],
             })
             await send({"type": "http.response.body", "body": body})
         else:
-            # Add score headers for upstream use, then pass through
-            scope["headers"] = list(scope.get("headers", []))
-            scope["headers"].append([b"x-microguard-label", b"human"])
-            scope["headers"].append([b"x-microguard-score", str(result["score"]).encode()])
+            # Replace, never append: a client can send its own
+            # x-microguard-* headers, and header lookups return the first
+            # match, so appending would let the client's value win.
+            scope["headers"] = [
+                (k, v)
+                for k, v in scope.get("headers", [])
+                if not k.lower().startswith(b"x-microguard-")
+            ]
+            scope["headers"].extend(
+                (k, v) for k, v in _score_headers_asgi(result)
+            )
             await self.app(scope, receive, send)
 
 
@@ -106,17 +141,22 @@ class MicroguardWSGI:
     """WSGI middleware for real-time bot detection.
 
     Constructor args match `microguard serve` flags:
-        redis_url, block_threshold, session_ttl
+        redis_url, block_threshold, session_ttl, trust_forwarded_for
     """
+
+    # Class-level default so instances built without __init__ still resolve it.
+    _trust_xff: bool = False
 
     def __init__(
         self,
         app: Any,
         redis_url: str = "redis://localhost:6379",
-        block_threshold: float = 0.85,
+        block_threshold: float = BLOCK_THRESHOLD_DEFAULT,
         session_ttl: int = 1800,
+        trust_forwarded_for: bool = False,
     ):
         self.app = app
+        self._trust_xff = trust_forwarded_for
         self._r = redis.Redis.from_url(redis_url, decode_responses=True)
         self._store = RedisSessionStateStore(self._r, default_ttl=session_ttl)
         self._scorer = LiveScorer(
@@ -126,11 +166,11 @@ class MicroguardWSGI:
         )
 
     def __call__(self, environ: dict, start_response: Any) -> Any:
-        ip = (
-            environ.get("HTTP_X_REAL_IP")
-            or environ.get("HTTP_X_FORWARDED_FOR", "").split(",")[0].strip()
-            or environ.get("REMOTE_ADDR", "")
-        )
+        ip = environ.get("HTTP_X_REAL_IP", "").strip()
+        if not ip and self._trust_xff:
+            ip = environ.get("HTTP_X_FORWARDED_FOR", "").split(",")[0].strip()
+        if not ip:
+            ip = environ.get("REMOTE_ADDR", "")
         ua = environ.get("HTTP_USER_AGENT", "")
         method = environ.get("REQUEST_METHOD", "GET")
         path = environ.get("PATH_INFO", "/")
@@ -146,36 +186,71 @@ class MicroguardWSGI:
             user_agent=ua,
         )
 
-        result = self._scorer.score_request(entry)
+        try:
+            result = self._scorer.score_request(entry)
+        except Exception:
+            # Fail open: a Redis outage must not 500 every request.
+            logger.exception("scoring failed, allowing request")
+            result = dict(_FAIL_OPEN)
 
         if result["label"] == "bot":
             body = json.dumps(result).encode()
             headers = [
-                ("X-Microguard-Label", "bot"),
-                ("X-Microguard-Score", str(result["score"])),
+                *_score_headers(result),
                 ("Content-Type", "application/json"),
                 ("Content-Length", str(len(body))),
             ]
             start_response("403 Forbidden", headers)
             return [body]
         else:
-            environ["HTTP_X_MICROGUARD_LABEL"] = "human"
-            environ["HTTP_X_MICROGUARD_SCORE"] = str(result["score"])
+            for name, value in _score_headers(result):
+                environ["HTTP_" + name.upper().replace("-", "_")] = value
             return self.app(environ, start_response)
 
 
 # --- Helpers ---
 
 
-def _extract_ip(headers: dict) -> str:
-    """Extract client IP from ASGI headers."""
-    xff = _decode_header(headers.get(b"x-forwarded-for", b""))
-    if xff:
-        return xff.split(",")[0].strip()
+def _score_headers(result: dict) -> list[tuple[str, str]]:
+    """The decision as headers, for the wrapped app to read.
+
+    The blended score alone cannot tell the app whether the rules or the model
+    drove the call, which is what you need to tune a threshold or explain a
+    block to a customer.
+    """
+    return [
+        ("X-Microguard-Label", result["label"]),
+        ("X-Microguard-Score", str(result["score"])),
+        ("X-Microguard-Model-Score", str(result["model_score"])),
+        ("X-Microguard-Heuristic", result["heuristic_label"]),
+        ("X-Microguard-Reason", result["heuristic_reason"]),
+    ]
+
+
+def _score_headers_asgi(result: dict) -> list[list[bytes]]:
+    """The same headers, ASGI's lowercase byte-pair form."""
+    return [
+        [name.lower().encode(), value.encode()]
+        for name, value in _score_headers(result)
+    ]
+
+
+def _extract_ip(headers: dict, trust_forwarded_for: bool = False, fallback: str = "") -> str:
+    """Resolve the client IP from ASGI headers.
+
+    X-Real-IP is proxy-set and not forgeable by the client; X-Forwarded-For is,
+    so it is honored only when the caller opts in. Falls back to the transport
+    peer address rather than a constant, which would collapse every unproxied
+    client into one shared session.
+    """
     xri = _decode_header(headers.get(b"x-real-ip", b""))
     if xri:
         return xri.strip()
-    return "127.0.0.1"
+    if trust_forwarded_for:
+        xff = _decode_header(headers.get(b"x-forwarded-for", b""))
+        if xff:
+            return xff.split(",")[0].strip()
+    return fallback or "127.0.0.1"
 
 
 def _decode_header(value: Any) -> str:

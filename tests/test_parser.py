@@ -4,6 +4,7 @@
 import pytest
 
 from microguard.parser import (
+    LogEntry,
     detect_format,
     parse_file,
     parse_json_line,
@@ -175,3 +176,38 @@ class TestParseString:
     def test_parse_empty_string(self):
         entries = parse_string("", fmt='nginx')
         assert len(entries) == 0
+
+
+class TestLogEntrySerialization:
+    """to_dict/from_dict are the single codec for a LogEntry.
+
+    The live Redis store persists entries through these, so a field that stops
+    round-tripping stops reaching the detection rules. raw_line in particular
+    feeds labeler.py's HTTP/1.0 check and was the field the store's old private
+    codec existed to carry.
+    """
+
+    def test_to_dict_includes_raw_line(self):
+        entry = parse_nginx_line(NGINX_HUMAN)
+        assert entry.to_dict()['raw_line'] == entry.raw_line
+
+    def test_round_trips_every_field(self):
+        entry = parse_nginx_line(NGINX_HUMAN)
+        restored = LogEntry.from_dict(entry.to_dict())
+        for field in LogEntry.__slots__:
+            assert getattr(restored, field) == getattr(entry, field), field
+
+    def test_round_trip_survives_json(self):
+        import json as _json
+
+        entry = parse_nginx_line(NGINX_HUMAN)
+        restored = LogEntry.from_dict(_json.loads(_json.dumps(entry.to_dict())))
+        assert restored.timestamp == entry.timestamp
+        assert restored.raw_line == entry.raw_line
+
+    def test_from_dict_tolerates_a_payload_without_raw_line(self):
+        """Entries written before raw_line round-tripped must still load."""
+        entry = parse_nginx_line(NGINX_HUMAN)
+        payload = entry.to_dict()
+        del payload['raw_line']
+        assert LogEntry.from_dict(payload).raw_line == ''

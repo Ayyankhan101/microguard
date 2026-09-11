@@ -33,3 +33,25 @@ _.daemon_threads
 # NoRedirect.redirect_request is a nested class inside scanner.probe_url,
 # so it can't be imported here — reference it via attribute access instead.
 _.redirect_request
+
+# FastAPI route handlers and pydantic config — registered via decorators and
+# read by pydantic, never called by name from the package.
+from microguard.dashboard import api_health, api_live, api_model, api_scan, app as dashboard_app
+
+dashboard_app.create_app
+api_health.health
+api_scan.list_samples
+api_scan.scan
+api_scan.scan_upload
+api_scan.export
+api_model.describe_model
+api_model.evaluate
+api_live.stats
+api_live.events
+api_live.stream
+api_live.read_config
+api_live.write_config
+
+# FastAPI @app.middleware registers this by decoration; it is never called by name.
+_.check_token
+_.model_config

@@ -3,9 +3,17 @@ testpaths = ["tests"]
 
 [tool.coverage.run]
 source = ["microguard"]
+omit = [
+    # Parsed by vulture, never imported at runtime. Counting its 35 statements
+    # as "uncovered" made the headline number worse for no reason, and writing
+    # a test for it would be nonsense.
+    "microguard/vulture_whitelist.py",
+]
 
 [tool.coverage.report]
 exclude_lines = [
     "pragma: no cover",
     "if __name__ == .__main__.:",
+    # Protocol method bodies. A bare `...` is unexecutable by definition.
+    "^\\s*\\.\\.\\.$",
 ]

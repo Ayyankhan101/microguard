@@ -319,3 +319,154 @@ class TestApiPathGuard:
         from microguard.dashboard.app import _is_api_path
 
         assert _is_api_path({}) is False
+
+
+class TestDegradedStates:
+    """What the API does when the things it reads are missing."""
+
+    def test_the_model_endpoint_reports_503_without_a_trained_model(self, monkeypatch):
+        from microguard.dashboard import api_model
+        from microguard.dashboard.app import create_app
+
+        monkeypatch.setattr(api_model.os.path, "exists", lambda _p: False)
+        client = TestClient(create_app())
+
+        response = client.get("/api/model")
+
+        assert response.status_code == 503
+        assert "No trained model" in response.json()["detail"]
+
+    def test_evaluation_reports_503_without_a_trained_model(self, monkeypatch):
+        from microguard.dashboard import api_model
+        from microguard.dashboard.app import create_app
+
+        api_model._detector.cache_clear()
+        api_model._scores.cache_clear()
+        monkeypatch.setattr(api_model.os.path, "exists", lambda _p: False)
+        client = TestClient(create_app())
+
+        response = client.post("/api/model/evaluate",
+                               json={"dataset": "holdout", "threshold": 0.5})
+
+        assert response.status_code == 503
+        api_model._detector.cache_clear()
+        api_model._scores.cache_clear()
+
+    def test_samples_are_empty_when_the_data_directory_is_absent(self, monkeypatch):
+        from microguard.dashboard import api_scan
+        from microguard.dashboard.app import create_app
+
+        monkeypatch.setattr(api_scan, "DATA_DIR", "/nonexistent/data")
+        client = TestClient(create_app())
+
+        assert client.get("/api/scan/samples").json() == {"samples": []}
+
+
+class TestPathResolution:
+    def test_the_directory_itself_is_not_a_valid_target(self, tmp_path):
+        from microguard.dashboard.paths import resolve_within
+
+        assert resolve_within(str(tmp_path), ".") is None
+
+    def test_a_file_inside_resolves(self, tmp_path):
+        from microguard.dashboard.paths import resolve_within
+
+        (tmp_path / "a.log").write_text("x")
+
+        assert resolve_within(str(tmp_path), "a.log") is not None
+
+
+class TestSpaFallbackEdges:
+    def test_a_missing_index_does_not_mask_a_real_404(self, tmp_path):
+        """With no index.html there is nothing to fall back to, so the
+        StaticFiles 404 must surface unchanged."""
+        from microguard.dashboard.app import create_app
+
+        (tmp_path / "app.js").write_text("console.log(1)")
+        client = TestClient(create_app(static_dir=str(tmp_path)))
+
+        assert client.get("/some/route").status_code == 404
+
+
+class TestDashboardServer:
+    """run_dashboard's banner and wiring, with uvicorn stubbed out."""
+
+    def test_reports_its_configuration(self, monkeypatch, capsys):
+        import uvicorn
+
+        from microguard.dashboard import server
+
+        started = {}
+        monkeypatch.setattr(uvicorn, "run", lambda app, **kw: started.update(kw))
+
+        server.run_dashboard(port=8599, redis_url="redis://127.0.0.1:6390")
+
+        output = capsys.readouterr().out
+        assert "8599" in output
+        assert "redis://127.0.0.1:6390" in output
+        assert started["port"] == 8599
+
+    def test_warns_when_bound_off_loopback_without_a_token(self, monkeypatch, capsys):
+        import uvicorn
+
+        from microguard.dashboard import server
+
+        monkeypatch.setattr(uvicorn, "run", lambda app, **kw: None)
+
+        server.run_dashboard(host="0.0.0.0", redis_url="redis://127.0.0.1:6390")
+
+        assert "WARNING" in capsys.readouterr().out
+
+    def test_a_token_silences_the_warning(self, monkeypatch, capsys):
+        import uvicorn
+
+        from microguard.dashboard import server
+
+        monkeypatch.setattr(uvicorn, "run", lambda app, **kw: None)
+
+        server.run_dashboard(host="0.0.0.0", token="s3cret",
+                             redis_url="redis://127.0.0.1:6390")
+
+        output = capsys.readouterr().out
+        assert "api token: required" in output
+        assert "WARNING" not in output
+
+    def test_says_when_the_ui_has_not_been_built(self, monkeypatch, capsys):
+        import uvicorn
+
+        from microguard.dashboard import server
+
+        monkeypatch.setattr(uvicorn, "run", lambda app, **kw: None)
+        monkeypatch.setattr(server, "STATIC_DIR", "/nonexistent/static")
+
+        server.run_dashboard(redis_url="redis://127.0.0.1:6390")
+
+        assert "NOT BUILT" in capsys.readouterr().out
+
+
+class TestWithoutTheLiveExtra:
+    def test_a_missing_redis_package_degrades_to_an_in_process_recorder(
+        self, monkeypatch, caplog
+    ):
+        """microguard/live/__init__.py raises ImportError without redis-py, so
+        the dashboard must survive a base install and say what it lost."""
+        import builtins
+        import logging
+
+        from microguard.dashboard.app import create_app
+        from microguard.events import InMemoryDecisionRecorder
+
+        real_import = builtins.__import__
+
+        def no_redis(name, *args, **kwargs):
+            if name == 'redis' or name.startswith('microguard.live'):
+                raise ImportError("No module named 'redis'")
+            return real_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", no_redis)
+
+        with caplog.at_level(logging.WARNING):
+            app = create_app(redis_url="redis://localhost:6379")
+
+        assert isinstance(app.state.recorder, InMemoryDecisionRecorder)
+        assert "redis is not installed" in caplog.text

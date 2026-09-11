@@ -3,6 +3,32 @@
 ## [Unreleased]
 
 ### Added
+- **Test coverage raised from 77% to 100%**, 502 tests to 776. The number is
+  the side effect; the work was fixing tests that could not fail and covering
+  detection logic that had never run.
+  - `labeler.py` 85% → 100%: all 21 previously-unexercised rule returns,
+    including the WAF protected-endpoint scan, API-key scanning, credential
+    and POST brute-force, botnet signatures, directory brute-force, UA
+    rotation, HTTP/1.0-only, and the sustained-rate rule. Plus the two
+    exemptions that exist to prevent false positives — a GraphQL session must
+    not trip the single-endpoint rules, and a gRPC session must not trip
+    uniform timing — and a guard test pinning evaluation order itself.
+  - `training/` 0% → 100%: `generate.py`, `train.py` and
+    `build_real_dataset.py`. Every writing path is redirected to `tmp_path`;
+    `build_dataset` runs against fixtures in milliseconds rather than the 98
+    seconds the real corpus takes.
+  - `scanner.py` 77% → 100%, without adding network egress. New
+    `tests/test_scanner_http.py` runs a loopback `ThreadingHTTPServer`,
+    following the pattern `test_scanner_ws.py` already used, which covers
+    `probe_url_multiple` and `probe_and_analyze` — both previously untouched.
+  - `model.py` 70% → 100%: `BotDetector.train` had no test at all.
+  - Live-path gaps: `LiveSession.add_request` (no test had ever called it),
+    the ASGI middleware's fail-open path (the WSGI one was covered), and
+    `_extract_ip`'s `trust_forwarded_for` branch, which is a documented trust
+    boundary.
+  - Two of the 19 features, `method_mismatch_count` and
+    `max_sustained_click_rate`, had never been computed as anything but zero.
+  - CI now gates at `--cov-fail-under=98`.
 - **Real-time inline blocking** (`microguard/live/`, spec 0001) — the live path
   that had shipped across seven commits without a changelog entry:
   - `microguard serve` — a threaded stdlib HTTP server answering nginx
@@ -70,7 +96,70 @@
   `pyproject.toml` pytest/coverage config, wired into CI. Baseline: 71%
   overall; no hard gate yet.
 
+### Known defects, recorded rather than fixed
+
+These surfaced while writing the tests above. Each is pinned by a test that
+names it as a defect, so the eventual fix reads as a deliberate change rather
+than a regression.
+
+- **Train/serve normalization skew.** `training/train.py` maps a zero-range
+  feature column to `0.5`; `model.py`'s `predict()` maps the same column to
+  `0.0`. The network is therefore served an input it never saw in training.
+  One column is affected in the shipped model (`method_mismatch_count`, which
+  is constant in the training data). Measured end-to-end score shift: 0.007
+  mean, 0.097 worst case — small, but a 0.097 shift beside a 0.85 threshold can
+  flip a borderline block. Fixing it means choosing a side and retraining, so
+  it belongs in its own change.
+- **Heuristic rule 22 is unreachable.** `Cloudflare-protected site, normal
+  browser` (human, 0.65) exists to protect a real visitor whose UA carries a
+  CDN marker. Rule 5 returns `bot` at 0.90 for any UA matching the same CDN
+  pattern, seventeen rules earlier, so such a visitor is labeled a bot instead.
+  Marked `# pragma: no cover` in the source with the explanation.
+- **The synthetic top-up cap does not do what its comment says.**
+  `build_real_dataset.py` says the cap keeps "real data the majority of the bot
+  class", but it caps synthetic rows at 30% of a *target* derived from the human
+  count. With a thin real-bot corpus the synthetic share reaches 60-75%. It
+  does not bite today (2,500 real bots against 1,000 humans yields zero
+  synthetic rows) but would if the corpus shrank.
+- **`build_dataset` raises on an empty corpus.** With no sessions and no human
+  class, the final `zip(*combined)` unpacks an empty list and raises
+  `ValueError`.
+- **`data/real_bot_training_data.json` is stale.** Rebuilding it today yields
+  3,511 samples against the committed 3,580 (`heuristic_real` 2,029 versus
+  2,098), because `label_session` has changed since it was generated. The
+  `ground_truth` count is stable at 482 and is pinned as a regression anchor.
+
 ### Fixed
+- **Eleven tests passed while exercising different code than their names
+  claimed.** Coverage found them; the defect underneath is an assertion too
+  weak to fail.
+  - `tests/test_labeler_rules.py` (8): `label_session` evaluates ~24 rules in
+    order and returns on first match, and every bot rule returns the label
+    `bot`. Each of these tests built its session with a convenient bot-shaped
+    user agent (`Go-http-client/1.1`, `python-requests`, `Bot0/1.0`) that
+    tripped rule 1 or rule 3 long before the rule under test, then asserted
+    only `label == 'bot'`. The directory-brute-force test exercised the
+    known-bot-UA rule; the UA-rotation test exercised uniform timing; and so
+    on. Thirteen of the ~24 detection rules had never executed in any test run.
+    Every rule test now asserts the reason string and the confidence, which
+    together identify a rule uniquely, and the sessions were rebuilt to reach
+    the rule they name.
+  - `tests/test_scanner.py` (2): `test_probe_bad_ssl` reached out to
+    `self-signed.badssl.com` and asserted `timing >= 0`, true whether the
+    probe succeeded, was refused, or never left the machine — on all 12 CI
+    matrix jobs. Replaced with a loopback refusal that asserts an actual error.
+  - `tests/test_parser.py` (1): `test_parse_missing_file` caught the
+    `FileNotFoundError` from a bare `open()` inside `detect_format`, not the
+    handler it was named for. It now passes an explicit format and matches the
+    message.
+- **`microguard/training/generate.py` wrote outside the repo's data
+  directory** — its `__main__` block walked two `dirname`s instead of three, so
+  `python -m microguard.training.generate` created
+  `microguard/data/training_data.json` inside the package rather than
+  `data/training_data.json`. `train.py` does the same walk correctly.
+- **`docs/howto-retrain-the-model.md` claimed training takes "seconds, not
+  hours"** — measured at 2 to 3 minutes for a full run, about 100x the
+  implied figure. Corrected with the measurement.
 - **`tests/test_model.py::test_train_step` was a 2%-per-run flake** — it built
   an unseeded `BotDetector`, and on roughly 2% of random inits every hidden
   ReLU sits at zero for both of its input patterns, leaving the output bias as

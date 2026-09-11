@@ -37,7 +37,11 @@ jobs:
           pip install pytest pytest-cov httpx httpx2
 
       - name: Run tests
-        run: python -m pytest tests/ -v --tb=short --cov=microguard --cov-report=term-missing
+        # --cov-fail-under holds the line. Coverage reached 100% by fixing
+        # tests that passed for the wrong reason, not by padding; without a
+        # gate that erodes on the next PR. Two points of headroom so a
+        # legitimate pragma-less branch does not block a merge.
+        run: python -m pytest tests/ -v --tb=short --cov=microguard --cov-report=term-missing --cov-fail-under=98
 
       - name: Test CLI
         shell: bash

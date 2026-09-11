@@ -13,8 +13,10 @@ number you can trust more than the training accuracy.
 - Training data in `data/`. `data/real_bot_training_data.json` ships with the
   repo; see [where the labels come from](explanation-training-data.md).
 
-Training is pure Python on 85 parameters. It takes seconds, not hours, and needs
-no GPU.
+Training is pure Python on 85 parameters and needs no GPU. A full run over the
+shipped dataset is roughly **2 to 3 minutes**: 100 epochs across ~2,400 training
+rows at about 0.6ms per sample-epoch, plus a final scoring pass over the training,
+holdout and adversarial sets.
 
 ## Train
 

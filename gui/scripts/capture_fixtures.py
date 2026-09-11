@@ -35,7 +35,15 @@ class _MemoryStore(SessionStateStore):
 
     def record_request(self, ip, user_agent, entry, ttl_seconds=None):
         session = self._sessions.setdefault(ip, LiveSession(ip=ip, user_agent=user_agent))
-        session.add_request(entry)
+        # Deliberately NOT session.add_request(): that stamps time.time(), so
+        # duration — and every timing feature derived from it, hence
+        # model_score — changed on every capture and the fixtures could never
+        # match. Anchoring the clock to the log's own timestamps makes a
+        # capture reproducible on any machine. Capture-only; the real store
+        # uses wall-clock, which is what the live path needs.
+        session.requests.append(entry)
+        session.start_time = session.requests[0].timestamp.timestamp()
+        session.end_time = session.requests[-1].timestamp.timestamp()
         return session
 
     def delete(self, ip):

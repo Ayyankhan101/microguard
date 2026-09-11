@@ -71,6 +71,18 @@
   overall; no hard gate yet.
 
 ### Fixed
+- **The dashboard's SPA fallback swallowed `/api` 404s on Windows** — the
+  guard read the path StaticFiles hands its handler, which is
+  `os.sep`-normalized, so `api\nope` never matched a `"api/"` check and a
+  mistyped endpoint returned 200 with the HTML shell instead of a JSON 404.
+  The decision now comes from the ASGI scope's request path, extracted as
+  `_is_api_path()` and unit-tested on both platforms' shapes.
+- **Captured API fixtures could never match on a second run** — the live
+  decisions in `gui/src/api/__fixtures__` were scored through a store that
+  stamps `time.time()`, so `duration`, every timing feature derived from it,
+  and therefore `model_score` changed on every capture. The capture store now
+  anchors the session clock to the log's own timestamps, which also makes the
+  fixtures realistic (a 34s browser session rather than a 1.7ms artifact).
 - **`microguard probe <url> --verbose` crashed with a `TypeError`** — `cli.py`
   called `format_probe_report(results, verbose=True)`, but that function has
   never taken a `verbose` argument. The function that does the verbose

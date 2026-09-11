@@ -290,3 +290,32 @@ class TestSharedSecret:
 
     def test_no_token_configured_means_no_gate(self, client):
         assert client.get("/api/health").status_code == 200
+
+
+class TestApiPathGuard:
+    """The SPA fallback must not swallow /api 404s.
+
+    StaticFiles hands its handler an os.sep-normalized filesystem path, so a
+    guard reading that argument sees "api\\nope" on Windows and misses. The
+    decision has to come from the request path.
+    """
+
+    def test_recognizes_an_api_request(self):
+        from microguard.dashboard.app import _is_api_path
+
+        assert _is_api_path({"path": "/api/live/stats"}) is True
+
+    def test_does_not_treat_a_client_route_as_api(self):
+        from microguard.dashboard.app import _is_api_path
+
+        assert _is_api_path({"path": "/live"}) is False
+
+    def test_does_not_match_a_path_that_merely_contains_api(self):
+        from microguard.dashboard.app import _is_api_path
+
+        assert _is_api_path({"path": "/rapid/thing"}) is False
+
+    def test_tolerates_a_scope_without_a_path(self):
+        from microguard.dashboard.app import _is_api_path
+
+        assert _is_api_path({}) is False

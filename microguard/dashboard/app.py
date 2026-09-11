@@ -115,6 +115,17 @@ def _require_token(app: FastAPI, token: str) -> None:
         return await call_next(request)
 
 
+def _is_api_path(scope: dict) -> bool:
+    """Whether this request is for the API rather than the SPA.
+
+    Reads the request path from the ASGI scope, NOT the path StaticFiles
+    passes its handler: that one is os.sep-normalized, so on Windows it
+    arrives as "api\\live\\stats" and a "api/" check silently misses,
+    turning every mistyped endpoint into a 200 with the HTML shell.
+    """
+    return scope.get("path", "").lstrip("/").startswith("api/")
+
+
 def _mount_spa(app: FastAPI, static_dir: str) -> None:
     """Serve the built SPA, with unknown paths falling back to index.html.
 
@@ -133,10 +144,10 @@ def _mount_spa(app: FastAPI, static_dir: str) -> None:
                 # StaticFiles raises rather than returning a 404 response.
                 if missing.status_code != 404 or not os.path.isfile(index):
                     raise
-                if path.startswith("api/"):
-                    # A mistyped endpoint must stay a 404. Answering it with the
-                    # HTML shell turns a clear error into a confusing 200 that
-                    # fails later, wherever the response is parsed.
+                # A mistyped endpoint must stay a 404. Answering it with the
+                # HTML shell turns a clear error into a confusing 200 that
+                # fails later, wherever the response is parsed.
+                if _is_api_path(scope):
                     raise
                 return FileResponse(index)
 

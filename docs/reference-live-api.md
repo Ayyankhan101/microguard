@@ -344,7 +344,7 @@ both at once:
 | `mg:v1:events` | LIST | JSON decisions, newest first, capped at 1000 |
 | `mg:v1:counters` | HASH | `total`, `blocked`, `score_sum` |
 | `mg:v1:hist` | HASH | bucket index `0`–`19` → count |
-| `mg:v1:blocked_ips` | ZSET | IP → times blocked |
+| `mg:v1:blocked_ips` | ZSET | IP → times blocked, trimmed to the busiest 1000 |
 | `mg:v1:config` | HASH | `block_threshold` → float, absent when there is no override |
 
 One decision is one pipeline: `LPUSH` + `LTRIM`, `HINCRBY` on the counters and
@@ -354,6 +354,12 @@ pipeline too.
 Counters are cumulative rather than derived from the capped ring. A "blocked
 today" number that shrank as old decisions scrolled out of the ring would be
 worse than no number.
+
+The blocked-IP set is trimmed on write with `ZREMRANGEBYRANK`, keeping the
+highest counts. It is the only structure that would otherwise grow with the
+number of distinct attackers rather than with traffic volume. The trade is that
+a brand-new address can be evicted before it surfaces there; the decision feed
+is the place to look for whether a specific IP was blocked.
 
 These keys never expire on their own — they are process-lifetime operator
 counters, not per-visitor state. `FLUSHDB` or delete them explicitly to reset.

@@ -80,6 +80,12 @@
   on loopback.
 - `docs/howto-run-the-dashboard.md`, plus a Dashboard API section in
   `docs/reference-live-api.md`.
+- `docs/howto-operate-microguard.md` — running a deployment by hand: what runs
+  itself versus what needs you, telling the three failure modes apart (a dead
+  process is a 500 outage, not fail-open), what a restart costs versus what
+  flushing Redis costs, why a retrained model needs a restart, and Redis
+  housekeeping. Includes an optional systemd unit for anyone who later decides
+  they want supervision after all.
 - `tests/conftest.py` — shared `make_entry`/`make_session`/`nginx_log_file`
   fixtures, replacing three near-identical hand-rolled `_make_entry` copies
   across `test_features.py`, `test_labeler_rules.py`.
@@ -152,6 +158,17 @@ than a regression.
     `FileNotFoundError` from a bare `open()` inside `detect_format`, not the
     handler it was named for. It now passes an explicit format and matches the
     message.
+- **The blocked-IP set grew without bound.** `mg:v1:blocked_ips` held one entry
+  per distinct blocked address, `ZINCRBY`'d on every block and never trimmed or
+  expired — the only structure in the system that grew with the number of
+  distinct attackers rather than with traffic volume, so against a rotating
+  botnet it had no ceiling. The in-memory recorder's `Counter` had the same
+  defect. Both are now capped at `MAX_TRACKED_IPS` (1,000, a hundred times the
+  ten the dashboard displays). On the Redis side the trim rides the pipeline
+  that was already being sent, so recording is still one round trip. Trimming
+  keeps the highest counts, so a brand-new address can be evicted before it
+  surfaces in the top-ten display — the right trade for a structure that
+  answers "who is hitting hardest", and noted in both docstrings.
 - **Twelve `open()` calls in the package had no explicit encoding** — in
   `model.py`, `training/train.py`, `training/build_real_dataset.py` and
   `training/generate.py`. Without one, Python falls back to the OS locale

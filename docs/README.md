@@ -38,6 +38,7 @@ Task-oriented. You know roughly what you are doing and want it done.
 
 **Operating and developing**
 
+- [Operate it](howto-operate-microguard.md) — running it by hand: health checks, the three failure modes, restarting, housekeeping
 - [Run the dashboard](howto-run-the-dashboard.md) — the web UI and its API
 - [Retrain the model](howto-retrain-the-model.md) — the training pipeline and how to read its numbers
 - [Work on the dashboard UI](howto-work-on-the-gui.md) — the TypeScript side, and the fixture contract
@@ -68,7 +69,12 @@ Understanding-oriented. Why it works this way, and what it costs.
 [deploy behind nginx](howto-deploy-behind-nginx.md) or
 [in-process](howto-deploy-in-process.md) →
 [tune blocking](howto-tune-blocking.md) →
-[run the dashboard](howto-run-the-dashboard.md)
+[run the dashboard](howto-run-the-dashboard.md) →
+[operate it](howto-operate-microguard.md)
+
+**"It's live and something looks wrong."**
+[Operate it](howto-operate-microguard.md) tells the three failure modes apart →
+[tune blocking](howto-tune-blocking.md) for a specific verdict
 
 **"Why was this customer blocked?"**
 [Tune blocking](howto-tune-blocking.md) has the diagnostic order →

@@ -12,6 +12,11 @@ from microguard.live.server import CheckHandler
 
 BotDetector.sigmoid
 LogEntry.to_dict
+
+# Asserted in tests/test_events.py; the Redis side uses ZCARD for the same
+# property, so nothing in the package calls this by name.
+from microguard.events import InMemoryDecisionRecorder
+InMemoryDecisionRecorder.tracked_ip_count
 _url_depth
 _url_width
 GroundTruthRule.id

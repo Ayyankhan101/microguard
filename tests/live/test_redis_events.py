@@ -153,3 +153,42 @@ def test_an_unreadable_event_is_skipped_rather_than_blanking_the_feed(recorder, 
     events = recorder.recent()
 
     assert [d["ip"] for d in events] == ["10.0.0.5"]
+
+
+def test_the_blocked_ip_set_stops_growing_at_the_cap(recorder, redis_client):
+    """Against real Redis, because ZREMRANGEBYRANK semantics are the point."""
+    from microguard.events import MAX_TRACKED_IPS
+
+    for i in range(MAX_TRACKED_IPS + 300):
+        recorder.record(decision(ip=f"10.0.{i // 256}.{i % 256}", label="bot"))
+
+    assert redis_client.zcard("mg:v1:blocked_ips") <= MAX_TRACKED_IPS
+
+
+def test_the_busiest_ips_survive_eviction(recorder):
+    from microguard.events import MAX_TRACKED_IPS
+
+    for _ in range(50):
+        recorder.record(decision(ip="203.0.113.9", label="bot"))
+
+    for i in range(MAX_TRACKED_IPS + 300):
+        recorder.record(decision(ip=f"10.0.{i // 256}.{i % 256}", label="bot"))
+
+    assert recorder.stats()["top_blocked_ips"][0] == {"ip": "203.0.113.9", "count": 50}
+
+
+def test_trimming_does_not_touch_the_cumulative_counters(recorder):
+    from microguard.events import MAX_TRACKED_IPS
+
+    blocks = MAX_TRACKED_IPS + 200
+    for i in range(blocks):
+        recorder.record(decision(ip=f"10.0.{i // 256}.{i % 256}", label="bot"))
+
+    assert recorder.stats()["blocked"] == blocks
+
+
+def test_allowed_requests_never_touch_the_set(recorder, redis_client):
+    for i in range(50):
+        recorder.record(decision(ip=f"198.51.100.{i}", label="human"))
+
+    assert redis_client.zcard("mg:v1:blocked_ips") == 0

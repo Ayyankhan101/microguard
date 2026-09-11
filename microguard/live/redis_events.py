@@ -8,7 +8,7 @@ implementation live in microguard/events.py, which imports without Redis.
         mg:v1:events       LIST of JSON decisions, newest FIRST, capped
         mg:v1:counters     HASH  total / blocked / score_sum
         mg:v1:hist         HASH  bucket index 0-19 -> count
-        mg:v1:blocked_ips  ZSET  ip -> times blocked
+        mg:v1:blocked_ips  ZSET  ip -> times blocked, capped
 
     One decision == one pipeline, one round trip:
 
@@ -19,6 +19,7 @@ implementation live in microguard/events.py, which imports without Redis.
         HINCRBYFLOAT mg:v1:counters score_sum <score>
         HINCRBY mg:v1:hist         <bucket> 1
         ZINCRBY mg:v1:blocked_ips  1 <ip>             (blocked decisions only)
+        ZREMRANGEBYRANK mg:v1:blocked_ips 0 -N-1      (blocked decisions only)
 
 Why counters rather than aggregating the ring: the ring is capped, so totals
 derived from it would silently shrink as history scrolls off. An operator
@@ -27,6 +28,12 @@ watching "blocked today" drop while nothing improved is worse than no number.
 Why newest-first (LPUSH) here but newest-last (RPUSH) in redis_store: that
 store re-reads the whole list in order to rebuild a session, while this one
 only ever reads the newest N. LPUSH + LRANGE 0 N-1 is that read directly.
+
+Why the blocked-IP set is trimmed: it is the only structure here that would
+grow with the number of DISTINCT attackers rather than with traffic volume, so
+against a rotating botnet it had no ceiling. ZREMRANGEBYRANK drops the lowest
+ranks, which are the lowest counts, keeping the busiest — see MAX_TRACKED_IPS
+in events.py for what that costs.
 
 Keys are unversioned by IP and never expire on their own — they are process
 lifetime counters for an operator, not per-visitor state. Bump the prefix
@@ -41,7 +48,13 @@ import time
 
 import redis
 
-from ..events import DEFAULT_CAPACITY, SCORE_BUCKETS, TOP_IPS, score_bucket
+from ..events import (
+    DEFAULT_CAPACITY,
+    MAX_TRACKED_IPS,
+    SCORE_BUCKETS,
+    TOP_IPS,
+    score_bucket,
+)
 
 RedisClient = redis.Redis  # type: ignore[type-arg]
 
@@ -95,6 +108,10 @@ class RedisDecisionRecorder:
         if blocked:
             pipe.hincrby(self._counters_key, "blocked", 1)
             pipe.zincrby(self._blocked_ips_key, 1, result.get("ip", ""))
+            # Ranks ascend by score, so this drops the lowest counts and keeps
+            # the busiest. A no-op until the set is actually full, and it rides
+            # the pipeline that was already being sent — still one round trip.
+            pipe.zremrangebyrank(self._blocked_ips_key, 0, -MAX_TRACKED_IPS - 1)
         pipe.execute()
 
     def stats(self) -> dict:

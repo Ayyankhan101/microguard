@@ -378,9 +378,33 @@ def train_model(
     return model
 
 
-def main():
-    """Main training entry point."""
-    data_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), 'data')
+def default_data_dir() -> str:
+    """The repo's data/ directory, resolved from this file's location.
+
+    Split out from main() so it can be checked without running a training
+    pass against the real directory.
+    """
+    here = os.path.dirname(os.path.abspath(__file__))
+    return os.path.join(os.path.dirname(os.path.dirname(here)), 'data')
+
+
+def main(data_dir: str | None = None, epochs: int = 100, learning_rate: float = 0.05):
+    """Main training entry point.
+
+    Args:
+        data_dir: Where to read datasets from and write the model to. Defaults
+            to the repo's data/ directory. Parameterized so the dataset-priority
+            dispatch below can be exercised against a temporary directory — a
+            test that ran this against the real data/ would overwrite the
+            shipped model.json, normalization.json and both eval sets.
+        epochs: Training epochs. Lower it for a smoke run.
+        learning_rate: SGD learning rate.
+    """
+    # Not exercised in tests on purpose: taking this branch means training
+    # against the real data/ and overwriting the shipped model. The resolution
+    # itself is covered via default_data_dir().
+    if data_dir is None:  # pragma: no cover
+        data_dir = default_data_dir()
 
     group_ids = None
     provenance = None
@@ -442,8 +466,8 @@ def main():
         features=features,
         labels=labels,
         model_path=model_path,
-        epochs=100,
-        learning_rate=0.05,
+        epochs=epochs,
+        learning_rate=learning_rate,
         group_ids=group_ids,
         provenance=provenance,
     )

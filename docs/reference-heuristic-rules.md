@@ -41,13 +41,13 @@ much of the blended score this rule can carry on its own — see
 | 13 | `bot` | 0.70 | One path hit >20 times and >70% of the session, not a single-endpoint API | `repeated endpoint hit <n> times` |
 | 14 | `bot` | 0.75 | API key scanning or credential brute force (see below) | varies |
 | 15 | `bot` | 0.60 | >5 requests from a UA that is neither a known browser nor empty | `unknown user-agent: <ua>` |
-| 16 | `bot` | 0.65 | >20 requests inside 5 seconds | `<n> requests in <x>s` |
+| 16 | `bot` | 0.65 | >20 requests inside 5 seconds — in practice only under 1s, see rule 10 | `<n> requests in <x>s` |
 | 17 | `bot` | 0.60 | >30 requests, more than half between 02:00 and 06:00 | `mostly night-time activity (<n>/<m> requests)` |
 | 18 | `human` | 0.75 | Browser UA, <50 requests, session longer than 30s | `known browser, reasonable session (<n> req, <x>s)` |
 | 19 | `human` | 0.70 | ≥3 requests, longest gap more than 3× the mean | `variable timing (max/avg ratio: <x>)` |
 | 20 | `human` | 0.65 | ≥5 requests across ≥5 distinct paths | `exploring <n> different endpoints` |
 | 21 | `human` | 0.60 | ≥3 requests, more than half carry a referrer | `natural navigation with <n> referrers` |
-| 22 | `human` | 0.65 | CDN UA that is also a browser UA, <30 requests | `Cloudflare-protected site, normal browser` |
+| 22 | `human` | 0.65 | CDN UA that is also a browser UA, <30 requests — **unreachable, see below** | `Cloudflare-protected site, normal browser` |
 | 23 | `human` | 0.50 | Nothing matched | `no strong signals either way` |
 
 The numbered comments in `labeler.py` do not match this order — several numbers
@@ -116,6 +116,11 @@ requests over 1.5ms extrapolates to roughly 200,000 req/min — a real visitor
 blocked by arithmetic. Any rate heuristic shared between the two paths needs
 checking against microsecond timestamps, not log-file granularity.
 
+Rule 10's floor also makes **rule 16** mostly unreachable. A session of more than
+20 requests spanning 1 to 5 seconds always exceeds 50 req/min, so rule 10 claims
+it first at 0.75. Rule 16 only fires when the burst is shorter than
+`MIN_RATE_WINDOW_S`, below which rule 10 declines to run at all.
+
 **Rule 14 — credential and key scanning** (`_check_api_key_patterns`), any of:
 
 | Condition | Reason |
@@ -137,6 +142,18 @@ and 13 are skipped and evaluation continues.
 
 The exemption is path-based, so it only works when the API is reachable at a
 recognizable path. A GraphQL endpoint mounted at `/v2/query` is not exempt.
+
+## Rule 22 never fires
+
+`Cloudflare-protected site, normal browser` exists to protect a real visitor
+whose user agent carries a CDN marker. It cannot be reached: rule 5 returns
+`bot` at 0.90 for **any** UA matching the same CDN pattern, seventeen rules
+earlier. A visitor with `akamai` or `cloudflare` in their UA string is therefore
+labeled a bot at high confidence.
+
+The rule is marked `# pragma: no cover` in the source with this explanation, and
+`tests/test_labeler_rules.py::test_cdn_ua_that_is_also_a_browser_is_labeled_bot`
+pins the actual behavior so the eventual fix reads as a deliberate change.
 
 ## Human rules are weaker on purpose
 

@@ -136,9 +136,11 @@ def parse_nginx_line(line: str) -> LogEntry | None:
     except (ValueError, TypeError):
         size = 0
     
+    # The regex captures status as \d{3}, so a match guarantees int() succeeds.
+    # Kept as a guard in case that pattern is ever loosened; unreachable today.
     try:
         status = int(match.group('status'))
-    except (ValueError, TypeError):
+    except (ValueError, TypeError):  # pragma: no cover
         return None
     
     return LogEntry(

@@ -390,7 +390,14 @@ def label_session(session: Session) -> tuple[str, float, str]:
         return 'human', 0.60, f'natural navigation with {has_referer} referrers'
     
     # 19. Behind Cloudflare with normal browser (likely real user)
-    if CLOUDFLARE_BYPASS_RE.search(ua) and BROWSER_UA_RE.search(ua) and session.request_count < 30:
+    #
+    # UNREACHABLE. Rule 5 above returns bot at 0.90 for ANY user agent matching
+    # CLOUDFLARE_BYPASS_RE, so no session that satisfies the first condition
+    # here ever gets this far. The rule was meant to protect a real visitor
+    # whose UA carries a CDN marker; today that visitor is labeled a bot
+    # instead. Left in place rather than deleted because the intent is right
+    # and the fix is a behavior change — see CHANGELOG.
+    if CLOUDFLARE_BYPASS_RE.search(ua) and BROWSER_UA_RE.search(ua) and session.request_count < 30:  # pragma: no cover
         return 'human', 0.65, 'Cloudflare-protected site, normal browser'
     
     # === DEFAULT ===

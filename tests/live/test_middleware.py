@@ -269,3 +269,86 @@ class TestConstructorRejectsUnknownKwargs:
     def test_wsgi_rejects_unknown_kwarg(self):
         with pytest.raises(TypeError):
             MicroguardWSGI(_dummy_wsgi_app, block_treshold=0.5)
+
+
+class TestMiddlewareRecordsDecisions:
+    """In-process deployments feed the dashboard too, not just `serve`."""
+
+    def test_asgi_scorer_gets_a_redis_backed_recorder(self):
+        from microguard.live.redis_events import RedisDecisionRecorder
+
+        async def app(scope, receive, send):
+            pass
+
+        middleware = MicroguardASGI(app)
+
+        assert isinstance(middleware._scorer._recorder, RedisDecisionRecorder)
+
+    def test_wsgi_scorer_gets_a_redis_backed_recorder(self):
+        from microguard.live.redis_events import RedisDecisionRecorder
+
+        middleware = MicroguardWSGI(_dummy_wsgi_app)
+
+        assert isinstance(middleware._scorer._recorder, RedisDecisionRecorder)
+
+
+class TestMiddlewareRuntimeConfig:
+    """A threshold set from the dashboard reaches an in-process deployment.
+
+    Real Redis, because the point is that a value written by one process
+    changes a decision made in another.
+    """
+
+    @pytest.fixture()
+    def redis_url(self):
+        redis = pytest.importorskip("redis")
+        url = "redis://localhost:6379/15"
+        try:
+            client = redis.Redis.from_url(url, decode_responses=True)
+            client.ping()
+        except redis.ConnectionError:
+            pytest.skip("Redis not available on localhost:6379")
+        client.flushdb()
+        yield url
+        client.flushdb()
+
+    def _set_override(self, redis_url, value):
+        import redis as redis_module
+
+        from microguard.live.runtime_config import RedisRuntimeConfig
+
+        client = redis_module.Redis.from_url(redis_url, decode_responses=True)
+        RedisRuntimeConfig(client).set_block_threshold(value)
+
+    def test_wsgi_blocks_a_benign_request_once_the_threshold_is_dropped(self, redis_url):
+        self._set_override(redis_url, 0.0)
+        middleware = MicroguardWSGI(_dummy_wsgi_app, redis_url=redis_url)
+
+        status = []
+        middleware(
+            {
+                "REQUEST_METHOD": "GET",
+                "PATH_INFO": "/api/test",
+                "HTTP_X_REAL_IP": "9.9.9.9",
+                "HTTP_USER_AGENT": "Mozilla/5.0",
+            },
+            lambda code, headers: status.append(code),
+        )
+
+        assert status[0].startswith("403")
+
+    def test_wsgi_allows_the_same_request_with_no_override_set(self, redis_url):
+        middleware = MicroguardWSGI(_dummy_wsgi_app, redis_url=redis_url)
+
+        status = []
+        middleware(
+            {
+                "REQUEST_METHOD": "GET",
+                "PATH_INFO": "/api/test",
+                "HTTP_X_REAL_IP": "9.9.9.8",
+                "HTTP_USER_AGENT": "Mozilla/5.0",
+            },
+            lambda code, headers: status.append(code),
+        )
+
+        assert status[0].startswith("200")

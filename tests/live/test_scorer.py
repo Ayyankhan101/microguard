@@ -244,7 +244,7 @@ class TestBlockBoundary:
 EXPECTED_KEYS = {
     "ip", "label", "score", "model_score", "heuristic_label",
     "heuristic_confidence", "heuristic_reason", "request_count",
-    "duration", "model_loaded", "reason",
+    "duration", "model_loaded", "reason", "block_threshold",
 }
 
 
@@ -298,3 +298,126 @@ def test_threshold_default_is_shared(store):
     from microguard.scoring import BLOCK_THRESHOLD_DEFAULT
 
     assert LiveScorer(store)._block_threshold == BLOCK_THRESHOLD_DEFAULT
+
+
+class TestDecisionRecording:
+    """The scorer optionally tees every decision to a recorder.
+
+    Recording exists for the dashboard; blocking exists for the site. The
+    second must never depend on the first, which is what most of these pin.
+    """
+
+    def test_scored_decisions_reach_the_recorder(self, store):
+        from microguard.events import InMemoryDecisionRecorder
+
+        recorder = InMemoryDecisionRecorder()
+        scorer = LiveScorer(store, recorder=recorder)
+
+        result = scorer.score_request(_make_entry(ua="python-requests/2.31"))
+
+        assert recorder.recent()[0]["ip"] == result["ip"]
+        assert recorder.stats()["total"] == 1
+
+    def test_short_circuited_integrations_are_recorded_too(self, store):
+        from microguard.events import InMemoryDecisionRecorder
+
+        recorder = InMemoryDecisionRecorder()
+        scorer = LiveScorer(store, recorder=recorder)
+
+        scorer.score_request(_make_entry(url="/webhooks/stripe", ua="Stripe/1.0"))
+
+        assert recorder.stats()["total"] == 1
+
+    def test_a_recorder_that_raises_does_not_change_the_verdict(self, store):
+        class ExplodingRecorder:
+            def record(self, result):
+                raise RuntimeError("redis is down")
+
+        entry = _make_entry(ua="curl/8.0")
+        expected = LiveScorer(store, block_threshold=0.5).score_request(entry)
+        store.delete(entry.ip)
+
+        scorer = LiveScorer(store, block_threshold=0.5, recorder=ExplodingRecorder())
+        result = scorer.score_request(entry)
+
+        assert result["label"] == expected["label"]
+        assert result["score"] == expected["score"]
+
+    def test_a_recorder_that_raises_is_logged_not_swallowed_silently(self, store, caplog):
+        class ExplodingRecorder:
+            def record(self, result):
+                raise RuntimeError("redis is down")
+
+        scorer = LiveScorer(store, recorder=ExplodingRecorder())
+
+        with caplog.at_level(logging.ERROR):
+            scorer.score_request(_make_entry())
+
+        assert "redis is down" in caplog.text
+
+    def test_no_recorder_is_the_default(self, store):
+        scorer = LiveScorer(store)
+
+        assert scorer.score_request(_make_entry())["label"] == "human"
+
+
+class TestRuntimeThreshold:
+    """The block threshold can be moved without restarting the scorer.
+
+    Tuning a live threshold today means editing a flag and restarting, which
+    drops every in-flight session. A source lets an operator move it from the
+    dashboard; the constructor value stays the default when there is none.
+    """
+
+    def test_the_source_overrides_the_constructor_threshold(self, store):
+        scorer = LiveScorer(store, block_threshold=1.0, threshold_source=lambda: 0.0)
+
+        result = scorer.score_request(_make_entry(ua="curl/8.0"))
+
+        assert result["label"] == "bot"
+
+    def test_the_constructor_value_is_used_when_the_source_returns_none(self, store):
+        scorer = LiveScorer(store, block_threshold=1.0, threshold_source=lambda: None)
+
+        assert scorer.score_request(_make_entry(ua="curl/8.0"))["label"] == "human"
+
+    def test_the_threshold_is_read_per_request_not_cached_by_the_scorer(self, store):
+        thresholds = iter([1.0, 0.0])
+        scorer = LiveScorer(
+            store, block_threshold=1.0, threshold_source=lambda: next(thresholds)
+        )
+
+        first = scorer.score_request(_make_entry(ua="curl/8.0"))
+        second = scorer.score_request(_make_entry(ua="curl/8.0"))
+
+        assert first["label"] == "human"
+        assert second["label"] == "bot"
+
+    def test_a_source_that_raises_falls_back_to_the_constructor_threshold(self, store):
+        def exploding():
+            raise RuntimeError("redis is down")
+
+        scorer = LiveScorer(store, block_threshold=1.0, threshold_source=exploding)
+
+        assert scorer.score_request(_make_entry(ua="curl/8.0"))["label"] == "human"
+
+    def test_the_threshold_used_is_reported_in_the_decision(self, store):
+        scorer = LiveScorer(store, block_threshold=1.0, threshold_source=lambda: 0.25)
+
+        assert scorer.score_request(_make_entry())["block_threshold"] == 0.25
+
+
+def test_fail_open_payloads_match_the_real_decision_shape(store):
+    """Both entrypoints hand back a canned payload when scoring blows up.
+
+    They only avoid downstream special-casing if that payload has the same
+    keys as a real decision, so this pins the two together rather than
+    trusting the comment above each one.
+    """
+    from microguard.live.middleware import _FAIL_OPEN
+    from microguard.live.server import _fail_open_result
+
+    real = LiveScorer(store).score_request(_make_entry())
+
+    assert set(_fail_open_result("1.2.3.4")) == set(real)
+    assert set(_FAIL_OPEN) == set(real)

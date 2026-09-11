@@ -25,7 +25,9 @@ from typing import Any
 import redis
 
 from ..parser import LogEntry
+from .redis_events import RedisDecisionRecorder
 from .redis_store import RedisSessionStateStore
+from .runtime_config import RedisRuntimeConfig
 from .scorer import BLOCK_THRESHOLD_DEFAULT, LiveScorer
 
 logger = logging.getLogger(__name__)
@@ -43,6 +45,9 @@ _FAIL_OPEN = {
     "request_count": 0,
     "duration": 0.0,
     "model_loaded": False,
+    # No threshold was consulted, and saying otherwise would let a dashboard
+    # plot a bar this decision never met.
+    "block_threshold": None,
 }
 
 # --- ASGI Middleware (FastAPI / Starlette) ---
@@ -74,6 +79,11 @@ class MicroguardASGI:
             self._store,
             block_threshold=block_threshold,
             session_ttl=session_ttl,
+            # Same Redis, same keys as `microguard serve`, so an in-process
+            # deployment shows up in `microguard dashboard` too — and honors a
+            # threshold moved from it without a restart.
+            recorder=RedisDecisionRecorder(self._r),
+            threshold_source=RedisRuntimeConfig(self._r).block_threshold,
         )
 
     async def __call__(self, scope: dict, receive: Any, send: Any) -> None:
@@ -163,6 +173,11 @@ class MicroguardWSGI:
             self._store,
             block_threshold=block_threshold,
             session_ttl=session_ttl,
+            # Same Redis, same keys as `microguard serve`, so an in-process
+            # deployment shows up in `microguard dashboard` too — and honors a
+            # threshold moved from it without a restart.
+            recorder=RedisDecisionRecorder(self._r),
+            threshold_source=RedisRuntimeConfig(self._r).block_threshold,
         )
 
     def __call__(self, environ: dict, start_response: Any) -> Any:

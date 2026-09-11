@@ -9,8 +9,10 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Callable
 from pathlib import Path
 
+from ..events import DecisionRecorder
 from ..features import extract_features
 from ..labeler import label_session
 from ..model import DEFAULT_MODEL_PATH, BotDetector
@@ -70,12 +72,16 @@ class LiveScorer:
         block_threshold: float = BLOCK_THRESHOLD_DEFAULT,
         session_ttl: int = 1800,
         short_circuit_label: str = "automated-integration",
+        recorder: DecisionRecorder | None = None,
+        threshold_source: Callable[[], float | None] = lambda: None,
     ):
         self._store = store
         self._model = _load_model(model_path)
         self._block_threshold = block_threshold
         self._session_ttl = session_ttl
         self._short_circuit_label = short_circuit_label
+        self._recorder = recorder
+        self._threshold_source = threshold_source
 
     @property
     def model_loaded(self) -> bool:
@@ -138,23 +144,41 @@ class LiveScorer:
         else:
             model_score = 0.0
 
+        threshold = self._threshold()
         combined = compute_combined_score(h_label, h_conf, model_score)
         # A score sitting exactly on the bar has not cleared it. At a 0.5
         # threshold that number is the neutral verdict itself ("no strong
         # signals either way" caps at exactly 0.5), and spec AC#7 says an
         # unknown visitor with no history is allowed by default. Strict `>`
         # also makes threshold 1.0 a real never-block escape hatch.
-        label = "bot" if combined > self._block_threshold else "human"
+        label = "bot" if combined > threshold else "human"
 
         return self._result(
             session,
             label=label,
             score=combined,
+            threshold=threshold,
             model_score=model_score,
             h_label=h_label,
             h_conf=h_conf,
             h_reason=h_reason,
         )
+
+    def _threshold(self) -> float:
+        """The threshold this request is judged against.
+
+        Read per request so an operator can move it from the dashboard without
+        restarting and dropping every in-flight session. A source that fails
+        falls back to the configured value rather than changing the verdict:
+        an unreachable config store must not silently start blocking everyone
+        or stop blocking anyone.
+        """
+        try:
+            override = self._threshold_source()
+        except Exception:
+            logger.exception("threshold source failed, using configured threshold")
+            return self._block_threshold
+        return self._block_threshold if override is None else override
 
     def _result(
         self,
@@ -166,10 +190,12 @@ class LiveScorer:
         h_label: str,
         h_conf: float,
         h_reason: str,
+        threshold: float | None = None,
     ) -> dict:
         """Assemble the decision payload. One place, so the short-circuit and
-        the scored path cannot report different shapes."""
-        return {
+        the scored path cannot report different shapes — and so recording
+        cannot miss one of them."""
+        result = {
             "ip": session.ip,
             "label": label,
             "score": score,
@@ -180,6 +206,27 @@ class LiveScorer:
             "request_count": session.request_count,
             "duration": session.duration,
             "model_loaded": self.model_loaded,
+            # Which bar this decision was actually judged against — without it
+            # a dashboard cannot tell a changed threshold from a changed score.
+            "block_threshold": self._block_threshold if threshold is None else threshold,
             # Kept for callers reading the old four-key shape.
             "reason": h_reason,
         }
+        self._record(result)
+        return result
+
+    def _record(self, result: dict) -> None:
+        """Tee the decision to the dashboard recorder, if there is one.
+
+        Every exception is swallowed. Recording exists so an operator can see
+        what happened; blocking exists so the site stays up. nginx turns any
+        non-2xx/401/403 from /check into a 500 for the visitor, so a Redis blip
+        in the recorder must not become an outage — the same fail-open reasoning
+        as server.py's scoring guard.
+        """
+        if self._recorder is None:
+            return
+        try:
+            self._recorder.record(result)
+        except Exception:
+            logger.exception("decision recording failed, continuing")

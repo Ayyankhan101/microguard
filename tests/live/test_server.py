@@ -256,3 +256,47 @@ class TestMain:
             session_ttl=600,
             trust_forwarded_for=True,
         )
+
+
+class TestRunServerRecording:
+    """The check server feeds the dashboard as a side effect of scoring."""
+
+    @patch("microguard.live.server.ThreadingHTTPServer")
+    @patch("microguard.live.server.RedisSessionStateStore")
+    @patch("microguard.live.server.LiveScorer")
+    @patch("microguard.live.server.redis.Redis")
+    def test_scorer_gets_a_redis_backed_recorder(
+        self, MockRedis, MockScorer, MockStore, MockHTTP
+    ):
+        from microguard.live.redis_events import RedisDecisionRecorder
+
+        mock_r = MagicMock()
+        MockRedis.from_url.return_value = mock_r
+        MockHTTP.return_value.serve_forever.side_effect = KeyboardInterrupt
+
+        run_server()
+
+        recorder = MockScorer.call_args[1]["recorder"]
+        assert isinstance(recorder, RedisDecisionRecorder)
+
+
+class TestRunServerRuntimeConfig:
+    """A threshold set from the dashboard reaches the running check server."""
+
+    @patch("microguard.live.server.ThreadingHTTPServer")
+    @patch("microguard.live.server.RedisSessionStateStore")
+    @patch("microguard.live.server.LiveScorer")
+    @patch("microguard.live.server.redis.Redis")
+    def test_scorer_reads_its_threshold_from_shared_config(
+        self, MockRedis, MockScorer, MockStore, MockHTTP
+    ):
+        mock_r = MagicMock()
+        # RedisRuntimeConfig reads through a pipeline, so that is what answers.
+        mock_r.pipeline.return_value.execute.return_value = ["0.25"]
+        MockRedis.from_url.return_value = mock_r
+        MockHTTP.return_value.serve_forever.side_effect = KeyboardInterrupt
+
+        run_server()
+
+        source = MockScorer.call_args[1]["threshold_source"]
+        assert source() == 0.25

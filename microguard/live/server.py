@@ -38,7 +38,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import redis
 
 from ..parser import LogEntry
+from .redis_events import RedisDecisionRecorder
 from .redis_store import RedisSessionStateStore
+from .runtime_config import RedisRuntimeConfig
 from .scorer import BLOCK_THRESHOLD_DEFAULT, LiveScorer
 
 logger = logging.getLogger(__name__)
@@ -62,6 +64,9 @@ def _fail_open_result(ip: str) -> dict:
         "request_count": 0,
         "duration": 0.0,
         "model_loaded": False,
+        # No threshold was consulted, and saying otherwise would let a
+        # dashboard plot a bar this decision never met.
+        "block_threshold": None,
     }
 
 
@@ -159,7 +164,20 @@ def run_server(
     r = redis.Redis.from_url(redis_url, decode_responses=True)
     r.ping()
     store = RedisSessionStateStore(r, default_ttl=session_ttl)
-    scorer = LiveScorer(store, block_threshold=block_threshold)
+    # Recording every decision is what gives `microguard dashboard` something
+    # to show. It shares this Redis and cannot fail the request: LiveScorer
+    # swallows recorder errors.
+    recorder = RedisDecisionRecorder(r)
+    # The flag is the default; an operator can move the live threshold from the
+    # dashboard without a restart, which would otherwise drop every in-flight
+    # session. No override set means the flag stands.
+    config = RedisRuntimeConfig(r)
+    scorer = LiveScorer(
+        store,
+        block_threshold=block_threshold,
+        recorder=recorder,
+        threshold_source=config.block_threshold,
+    )
 
     CheckHandler.scorer = scorer
     CheckHandler.trust_forwarded_for = trust_forwarded_for

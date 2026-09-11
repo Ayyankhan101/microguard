@@ -499,8 +499,8 @@ def main():
 
         # Format and output
         if args.verbose:
-            from .scanner import format_probe_report
-            content = format_probe_report(results, verbose=True)
+            from .scanner import format_probe_verbose
+            content = format_probe_verbose(results)
         elif args.json_pretty:
             from .report import format_json_pretty
             content = format_json_pretty(results)

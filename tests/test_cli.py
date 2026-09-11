@@ -237,6 +237,25 @@ class TestMainCLI:
         assert calls.get('http') == 'https://example.com'
         assert 'ws' not in calls
 
+    def test_probe_verbose_prints_the_feature_breakdown(self, monkeypatch, capsys):
+        """`probe --verbose` crashed: cli.py called format_probe_report() with a
+        verbose= kwarg it never accepted, while format_probe_verbose() sat
+        unused beside it."""
+        def fake_probe(url, **kwargs):
+            return {
+                'url': url, 'label': 'human', 'combined_score': 0.1,
+                'heuristic_score': 0.1, 'heuristic_reason': 'ok', 'model_score': 0.0,
+                'threshold': 0.7, 'timing': {'total': 0.1}, 'status_code': 200,
+                'headers': {'Server': 'nginx'}, 'body_preview': '', 'probes': 1,
+                'features': {'response_time': 0.1, 'header_count': 1},
+            }
+
+        monkeypatch.setattr('microguard.scanner.probe_and_analyze', fake_probe)
+        code = self._run(monkeypatch, ['probe', 'https://example.com', '--verbose'])
+
+        assert code == 0
+        assert 'response_time' in capsys.readouterr().out
+
     def test_probe_wss_dispatches_to_ws_probe(self, monkeypatch):
         calls = {}
 

@@ -20,6 +20,12 @@
   overall; no hard gate yet.
 
 ### Fixed
+- **`microguard probe <url> --verbose` crashed with a `TypeError`** — `cli.py`
+  called `format_probe_report(results, verbose=True)`, but that function has
+  never taken a `verbose` argument. The function that does the verbose
+  rendering, `format_probe_verbose()`, sat unused next to it; it is now wired
+  in, and `probe --verbose` is covered in `tests/test_cli.py`. This was the
+  last remaining `vulture` finding in the package.
 - **`watch.py` had the same heuristic/model score-blending asymmetry bug
   already fixed in `cli.py`** — an independent, undiscovered copy of the
   same logic. A confident heuristic 'human' call (e.g. a GraphQL session)

@@ -144,3 +144,12 @@ def test_recording_is_one_round_trip(recorder, redis_client):
         redis.client.Pipeline.execute = real_execute
 
     assert len(calls) == 1
+
+
+def test_an_unreadable_event_is_skipped_rather_than_blanking_the_feed(recorder, redis_client):
+    recorder.record(decision(ip="10.0.0.5"))
+    redis_client.lpush("mg:v1:events", "this is not json")
+
+    events = recorder.recent()
+
+    assert [d["ip"] for d in events] == ["10.0.0.5"]

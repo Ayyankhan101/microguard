@@ -174,7 +174,9 @@ def watch_logfile(
             sessions = group_into_sessions(entries, session_timeout)
             
             for session in sessions:
-                if session.request_count == 0:
+                # group_into_sessions only creates a Session when it is about
+                # to add a request, so an empty one never reaches here.
+                if session.request_count == 0:  # pragma: no cover
                     continue
                 
                 features = extract_features(session)

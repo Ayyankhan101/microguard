@@ -300,3 +300,21 @@ class TestRunServerRuntimeConfig:
 
         source = MockScorer.call_args[1]["threshold_source"]
         assert source() == 0.25
+
+
+class TestUnknownRoutes:
+    """The check server answers exactly one path: no CORS, no /metrics, no
+    health endpoint."""
+
+    def test_the_handler_returns_after_a_404_rather_than_scoring(self):
+        """The sibling test above uses a send_error that raises, so it never
+        reaches the return. This one lets send_error behave, which proves the
+        request is not scored afterwards.
+        """
+        handler = _make_handler(path="/metrics")
+        handler.send_error = MagicMock()
+
+        handler.do_GET()
+
+        handler.send_error.assert_called_once_with(404)
+        handler.scorer.score_request.assert_not_called()

@@ -182,7 +182,7 @@ def scan_logfile(
 
 def main():
     """CLI entry point."""
-    if sys.platform == 'win32':
+    if sys.platform == 'win32':  # pragma: no cover - exercised only on Windows
         # Windows consoles default stdout/stderr to the OS locale codepage
         # (commonly cp1252), which can't encode the emoji used throughout
         # terminal/report output — every `microguard scan` would crash on

@@ -16,7 +16,7 @@ import os
 try:
     from micrograd.engine import Value
     from micrograd.nn import MLP
-except ImportError:
+except ImportError:  # pragma: no cover - install-time guard, needs micrograd absent
     raise ImportError(
         "micrograd is required. Install with: pip install micrograd\n"
         "Or from source: pip install git+https://github.com/karpathy/micrograd.git"
@@ -96,8 +96,10 @@ class BotDetector:
         # Forward pass
         output = self.model(x)
         
-        # Handle both list and single Value returns
-        if isinstance(output, list):
+        # Handle both list and single Value returns. The final layer has one
+        # neuron, so micrograd returns a bare Value and this never fires with
+        # the shipped architecture; kept in case the shape changes.
+        if isinstance(output, list):  # pragma: no cover
             output = output[0]
         
         # Model outputs raw logit: positive = bot, negative = human
@@ -146,8 +148,8 @@ class BotDetector:
             # Forward pass
             output = self.model(x)
             
-            # Handle both list and single Value returns
-            if isinstance(output, list):
+            # Same unreachable unwrap as in predict() - see the note there.
+            if isinstance(output, list):  # pragma: no cover
                 output = output[0]
             
             # MSE loss: target is 1.0 for bot, -1.0 for human

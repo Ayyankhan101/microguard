@@ -4,13 +4,20 @@ In-memory store for unit tests. No Redis needed.
 Integration tests with Redis are in test_server_integration.py.
 """
 
+import asyncio
 import json
+import logging
 from datetime import datetime, timezone
 from unittest.mock import MagicMock
 
 import pytest
 
-from microguard.live.middleware import MicroguardASGI, MicroguardWSGI
+from microguard.live.middleware import (
+    MicroguardASGI,
+    MicroguardWSGI,
+    _decode_header,
+    _extract_ip,
+)
 from microguard.live.scorer import LiveScorer
 from microguard.parser import LogEntry
 
@@ -352,3 +359,166 @@ class TestMiddlewareRuntimeConfig:
         )
 
         assert status[0].startswith("200")
+
+
+# --- ASGI fail-open and scope handling ---
+
+
+class TestASGIFailOpen:
+    """The WSGI fail-open path was covered; the ASGI one was not.
+
+    Fail-open is load-bearing: a Redis outage must allow traffic rather than
+    500 every visitor. That property is worth pinning on both middlewares.
+    """
+
+    def _run(self, middleware, scope):
+        sent = []
+
+        async def send(message):
+            sent.append(message)
+
+        asyncio.get_event_loop().run_until_complete(
+            middleware(scope, MagicMock(), send)
+        )
+        return sent
+
+    def _http_scope(self):
+        return {
+            "type": "http",
+            "method": "GET",
+            "path": "/api/items",
+            "headers": [[b"x-real-ip", b"1.2.3.4"], [b"user-agent", b"Mozilla/5.0"]],
+        }
+
+    def test_a_scoring_failure_lets_the_request_through(self, asgi_store, caplog):
+        from microguard.live.middleware import MicroguardASGI as MG
+
+        reached = []
+
+        async def inner_app(scope, receive, send):
+            reached.append(scope["path"])
+            await send({"type": "http.response.start", "status": 200, "headers": []})
+            await send({"type": "http.response.body", "body": b"OK"})
+
+        class ExplodingScorer:
+            def score_request(self, entry):
+                raise RuntimeError("redis is down")
+
+        middleware = MG.__new__(MG)
+        middleware._store = asgi_store
+        middleware._scorer = ExplodingScorer()
+        middleware.app = inner_app
+
+        with caplog.at_level(logging.ERROR):
+            sent = self._run(middleware, self._http_scope())
+
+        assert reached == ["/api/items"]
+        assert sent[0]["status"] == 200
+        assert "redis is down" in caplog.text
+
+    def test_the_fail_open_verdict_is_forwarded_to_the_app(self, asgi_store):
+        from microguard.live.middleware import MicroguardASGI as MG
+
+        seen_headers = {}
+
+        async def inner_app(scope, receive, send):
+            seen_headers.update({k.decode(): v.decode() for k, v in scope["headers"]})
+            await send({"type": "http.response.start", "status": 200, "headers": []})
+            await send({"type": "http.response.body", "body": b"OK"})
+
+        class ExplodingScorer:
+            def score_request(self, entry):
+                raise RuntimeError("boom")
+
+        middleware = MG.__new__(MG)
+        middleware._store = asgi_store
+        middleware._scorer = ExplodingScorer()
+        middleware.app = inner_app
+
+        self._run(middleware, self._http_scope())
+
+        assert seen_headers["x-microguard-label"] == "human"
+        assert seen_headers["x-microguard-reason"] == "scoring unavailable"
+
+    def test_non_http_scopes_pass_straight_through_unscored(self, asgi_store):
+        from microguard.live.middleware import MicroguardASGI as MG
+
+        reached = []
+
+        async def inner_app(scope, receive, send):
+            reached.append(scope["type"])
+
+        class NeverCalledScorer:
+            def score_request(self, entry):
+                raise AssertionError("a websocket scope must not be scored")
+
+        middleware = MG.__new__(MG)
+        middleware._store = asgi_store
+        middleware._scorer = NeverCalledScorer()
+        middleware.app = inner_app
+
+        asyncio.get_event_loop().run_until_complete(
+            middleware({"type": "websocket"}, MagicMock(), MagicMock())
+        )
+
+        assert reached == ["websocket"]
+
+
+# --- The IP trust boundary ---
+
+
+class TestExtractIP:
+    """Sessions key on this value, so a forgeable one defeats detection.
+
+    A bot that can set its own X-Forwarded-For gets a fresh session per
+    request and never accumulates the history the rules need.
+    """
+
+    def test_x_real_ip_is_used(self):
+        assert _extract_ip({b"x-real-ip": b"1.2.3.4"}) == "1.2.3.4"
+
+    def test_x_forwarded_for_is_ignored_by_default(self):
+        headers = {b"x-forwarded-for": b"9.9.9.9"}
+
+        assert _extract_ip(headers, fallback="10.0.0.1") == "10.0.0.1"
+
+    def test_x_forwarded_for_is_honored_when_trusted(self):
+        headers = {b"x-forwarded-for": b"9.9.9.9"}
+
+        assert _extract_ip(headers, trust_forwarded_for=True) == "9.9.9.9"
+
+    def test_the_first_hop_wins_in_a_forwarded_chain(self):
+        headers = {b"x-forwarded-for": b"9.9.9.9, 10.0.0.5, 172.16.0.1"}
+
+        assert _extract_ip(headers, trust_forwarded_for=True) == "9.9.9.9"
+
+    def test_x_real_ip_wins_over_a_trusted_forwarded_for(self):
+        headers = {b"x-real-ip": b"1.2.3.4", b"x-forwarded-for": b"9.9.9.9"}
+
+        assert _extract_ip(headers, trust_forwarded_for=True) == "1.2.3.4"
+
+    def test_falls_back_to_the_transport_peer(self):
+        assert _extract_ip({}, fallback="192.0.2.7") == "192.0.2.7"
+
+    def test_last_resort_is_loopback_not_a_shared_constant(self):
+        # A constant would collapse every unproxied client into one session.
+        assert _extract_ip({}) == "127.0.0.1"
+
+    def test_empty_forwarded_for_is_not_treated_as_an_address(self):
+        assert _extract_ip({b"x-forwarded-for": b""}, trust_forwarded_for=True,
+                           fallback="10.0.0.2") == "10.0.0.2"
+
+
+class TestDecodeHeader:
+    def test_decodes_bytes(self):
+        assert _decode_header(b"Mozilla/5.0") == "Mozilla/5.0"
+
+    def test_passes_through_str(self):
+        assert _decode_header("Mozilla/5.0") == "Mozilla/5.0"
+
+    def test_empty_becomes_empty_string(self):
+        assert _decode_header(b"") == ""
+        assert _decode_header(None) == ""
+
+    def test_invalid_utf8_is_replaced_rather_than_raising(self):
+        assert _decode_header(b"caf\xff") == "caf�"

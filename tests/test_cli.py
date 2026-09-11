@@ -473,3 +473,253 @@ class TestDashboardCommand:
         self._run(monkeypatch, ['dashboard', '--allow-config-writes'])
 
         assert calls['allow_config_writes'] is True
+
+
+class TestScanOutputDispatch:
+    """Flag precedence: --watch > --verbose > --json-pretty > --output-file.
+
+    Each earlier flag silently wins, which is worth pinning because it is
+    surprising — `--verbose --output html` prints the verbose terminal dump.
+    """
+
+    def _run(self, monkeypatch, argv):
+        import sys
+
+        from microguard.cli import main
+
+        monkeypatch.setattr(sys, 'argv', ['microguard'] + argv)
+        try:
+            main()
+        except SystemExit as exc:
+            return exc.code
+        return 0
+
+    def test_verbose_prints_the_feature_breakdown(self, monkeypatch, capsys, nginx_log_file):
+        path = nginx_log_file(_bot_session_lines())
+
+        self._run(monkeypatch, ['scan', path, '--verbose'])
+
+        assert 'Verbose' in capsys.readouterr().out
+
+    def test_verbose_can_write_to_a_file(self, monkeypatch, tmp_path, nginx_log_file):
+        path = nginx_log_file(_bot_session_lines())
+        out = tmp_path / "verbose.txt"
+
+        self._run(monkeypatch, ['scan', path, '--verbose', '--output-file', str(out)])
+
+        assert out.exists()
+        assert 'Verbose' in out.read_text()
+
+    def test_verbose_wins_over_output_format(self, monkeypatch, capsys, nginx_log_file):
+        path = nginx_log_file(_bot_session_lines())
+
+        self._run(monkeypatch, ['scan', path, '--verbose', '--output', 'html'])
+
+        assert '<!DOCTYPE html>' not in capsys.readouterr().out
+
+    def test_json_pretty_prints_coloured_output(self, monkeypatch, capsys, nginx_log_file):
+        path = nginx_log_file(_bot_session_lines())
+
+        self._run(monkeypatch, ['scan', path, '--json-pretty'])
+
+        assert '\033[' in capsys.readouterr().out
+
+    def test_output_file_writes_nginx_rules(self, monkeypatch, tmp_path, nginx_log_file):
+        path = nginx_log_file(_bot_session_lines())
+        out = tmp_path / "deny.conf"
+
+        self._run(monkeypatch, ['scan', path, '--output', 'nginx', '--output-file', str(out)])
+
+        assert 'deny ' in out.read_text()
+
+    def test_output_file_writes_a_cloudflare_rule(self, monkeypatch, tmp_path, nginx_log_file):
+        path = nginx_log_file(_bot_session_lines())
+        out = tmp_path / "rule.txt"
+
+        self._run(monkeypatch, ['scan', path, '--output', 'cloudflare', '--output-file', str(out)])
+
+        assert 'ip.src' in out.read_text()
+
+    def test_output_file_writes_html(self, monkeypatch, tmp_path, nginx_log_file):
+        path = nginx_log_file(_bot_session_lines())
+        out = tmp_path / "report.html"
+
+        self._run(monkeypatch, ['scan', path, '--output', 'html', '--output-file', str(out)])
+
+        assert '<!DOCTYPE html>' in out.read_text()
+
+    def test_output_file_writes_json(self, monkeypatch, tmp_path, nginx_log_file):
+        import json as json_module
+
+        path = nginx_log_file(_bot_session_lines())
+        out = tmp_path / "report.json"
+
+        self._run(monkeypatch, ['scan', path, '--output', 'json', '--output-file', str(out)])
+
+        assert json_module.loads(out.read_text())['total_sessions'] >= 1
+
+    def test_output_file_writes_the_terminal_report(self, monkeypatch, tmp_path, nginx_log_file):
+        path = nginx_log_file(_bot_session_lines())
+        out = tmp_path / "report.txt"
+
+        self._run(monkeypatch, ['scan', path, '--output-file', str(out)])
+
+        assert 'Microguard Bot Traffic Report' in out.read_text()
+
+
+class TestProbeOutputDispatch:
+    def _run(self, monkeypatch, argv):
+        import sys
+
+        from microguard.cli import main
+
+        monkeypatch.setattr(sys, 'argv', ['microguard'] + argv)
+        try:
+            main()
+        except SystemExit as exc:
+            return exc.code
+        return 0
+
+    def _fake_probe(self, url, **kwargs):
+        return {
+            'url': url, 'label': 'human', 'combined_score': 0.1,
+            'heuristic_score': 0.1, 'heuristic_reason': 'ok', 'model_score': 0.0,
+            'threshold': 0.7, 'timing': {'total': 0.1}, 'status_code': 200,
+            'headers': {'Server': 'nginx'}, 'body_preview': '', 'probes': 1,
+            'features': {'response_time': 0.1},
+        }
+
+    def _fake_ws_probe(self, url, **kwargs):
+        result = self._fake_probe(url)
+        result.update({'protocol': 'websocket', 'connected': True,
+                       'handshake_ok': True, 'error': None})
+        return result
+
+    def test_probe_verbose_prints_the_feature_breakdown(self, monkeypatch, capsys):
+        monkeypatch.setattr('microguard.scanner.probe_and_analyze', self._fake_probe)
+
+        self._run(monkeypatch, ['probe', 'https://example.com', '--verbose'])
+
+        assert 'response_time' in capsys.readouterr().out
+
+    def test_probe_json_pretty(self, monkeypatch, capsys):
+        monkeypatch.setattr('microguard.scanner.probe_and_analyze', self._fake_probe)
+
+        self._run(monkeypatch, ['probe', 'https://example.com', '--json-pretty'])
+
+        assert '\033[' in capsys.readouterr().out
+
+    def test_probe_html_to_a_file(self, monkeypatch, tmp_path):
+        monkeypatch.setattr('microguard.scanner.probe_and_analyze', self._fake_probe)
+        out = tmp_path / "probe.html"
+
+        self._run(monkeypatch, ['probe', 'https://example.com',
+                                '--output', 'html', '--output-file', str(out)])
+
+        assert '<!DOCTYPE html>' in out.read_text()
+
+    def test_probe_json_output(self, monkeypatch, capsys):
+        monkeypatch.setattr('microguard.scanner.probe_and_analyze', self._fake_probe)
+
+        self._run(monkeypatch, ['probe', 'https://example.com', '--output', 'json'])
+
+        assert '"url"' in capsys.readouterr().out
+
+    def test_websocket_json_pretty(self, monkeypatch, capsys):
+        monkeypatch.setattr('microguard.scanner.probe_ws_and_analyze', self._fake_ws_probe)
+
+        self._run(monkeypatch, ['probe', 'wss://example.com/s', '--json-pretty'])
+
+        assert '\033[' in capsys.readouterr().out
+
+    def test_websocket_json_output(self, monkeypatch, capsys):
+        monkeypatch.setattr('microguard.scanner.probe_ws_and_analyze', self._fake_ws_probe)
+
+        self._run(monkeypatch, ['probe', 'wss://example.com/s', '--output', 'json'])
+
+        assert '"url"' in capsys.readouterr().out
+
+    def test_websocket_html_to_a_file(self, monkeypatch, tmp_path):
+        monkeypatch.setattr('microguard.scanner.probe_ws_and_analyze', self._fake_ws_probe)
+        out = tmp_path / "ws.html"
+
+        self._run(monkeypatch, ['probe', 'wss://example.com/s',
+                                '--output', 'html', '--output-file', str(out)])
+
+        assert '<!DOCTYPE html>' in out.read_text()
+
+
+class TestScanModelFallbacks:
+    def test_a_corrupt_model_falls_back_to_heuristics(self, tmp_path, capsys, nginx_log_file):
+        from microguard.cli import scan_logfile
+
+        path = nginx_log_file(_bot_session_lines())
+        bad_model = tmp_path / "model.json"
+        bad_model.write_text('{"weights": [0.1]}')
+
+        results = scan_logfile(path, model_path=str(bad_model))
+
+        assert results['model_used'] is False
+        assert 'Could not load model' in capsys.readouterr().err
+
+    def test_a_missing_model_scores_on_rules_alone(self, tmp_path, nginx_log_file):
+        from microguard.cli import scan_logfile
+
+        path = nginx_log_file(_bot_session_lines())
+
+        results = scan_logfile(path, model_path=str(tmp_path / "absent.json"))
+
+        assert results['model_used'] is False
+        assert all(s['model_score'] == 0.0 for s in results['sessions'])
+
+
+class TestProbeExitCodes:
+    def _run(self, monkeypatch, argv):
+        import sys
+
+        from microguard.cli import main
+
+        monkeypatch.setattr(sys, 'argv', ['microguard'] + argv)
+        try:
+            main()
+        except SystemExit as exc:
+            return exc.code
+        return 0
+
+    def test_a_bot_verdict_exits_one(self, monkeypatch):
+        def fake_probe(url, **kwargs):
+            return {
+                'url': url, 'label': 'bot', 'combined_score': 0.9,
+                'heuristic_score': 0.9, 'heuristic_reason': 'rate limited',
+                'model_score': 0.0, 'threshold': 0.7, 'timing': {'total': 0.1},
+                'status_code': 429, 'headers': {}, 'body_preview': '', 'probes': 1,
+                'features': {},
+            }
+
+        monkeypatch.setattr('microguard.scanner.probe_and_analyze', fake_probe)
+
+        assert self._run(monkeypatch, ['probe', 'https://example.com']) == 1
+
+
+class TestBareInvocationFallback:
+    def test_help_is_shown_when_the_sample_log_is_missing(self, monkeypatch, capsys):
+        """The zero-argument path scans a bundled sample; without it, show help
+        rather than a traceback."""
+        import os
+        import sys
+
+        import microguard.cli as cli_module
+
+        real_exists = os.path.exists
+        monkeypatch.setattr(
+            cli_module.os.path, 'exists',
+            lambda p: False if p.endswith('sample_access.log') else real_exists(p),
+        )
+        monkeypatch.setattr(sys, 'argv', ['microguard'])
+
+        try:
+            cli_module.main()
+        except SystemExit as exc:
+            assert exc.code == 0
+
+        assert 'usage:' in capsys.readouterr().out

@@ -78,6 +78,11 @@ A 403 here is a healthy answer, not a problem: curl sends its own user agent,
 which trips the known-bot rule. You are checking that the process *responds* at
 all. **No answer means it is gone** — restart it.
 
+Any other path answers 404 with a short explanation of what this server is and
+where the UI lives, so opening it in a browser tells you something useful
+instead of nothing. The status stays 404 either way, which is what a
+misconfigured `proxy_pass` depends on.
+
 If that curl works and nginx still 500s, the problem is on the nginx side:
 check `proxy_pass` points at `/check` and the `location` is marked `internal`.
 

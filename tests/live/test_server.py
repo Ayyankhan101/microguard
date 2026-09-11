@@ -5,8 +5,6 @@ import json
 import sys
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from microguard.live.server import CheckHandler, main, run_server
 
 
@@ -49,6 +47,9 @@ def _make_handler(
     handler.trust_forwarded_for = trust_forwarded_for
     handler.path = path
     handler.client_address = (ip, 0)
+    # do_GET reads server_address to build the curl example in its 404 body.
+    handler.server = MagicMock()
+    handler.server.server_address = ("127.0.0.1", 8400)
     handler.wfile = io.BytesIO()
     handler.rfile = io.BytesIO()
     handler.command = "GET"
@@ -97,10 +98,17 @@ class TestCheckHandler:
         handler.send_response.assert_called_with(403)
 
     def test_wrong_path_returns_404(self):
+        """Asserts the status, not that send_error was the thing that sent it.
+
+        nginx turns any auth_request response outside 2xx/401/403 into a 500
+        for the visitor, so a misconfigured proxy_pass depends on this staying
+        exactly 404.
+        """
         handler = _make_handler(path="/missing")
-        with pytest.raises(RuntimeError, match="404 sent"):
-            handler.do_GET()
-        handler.send_error.assert_called_with(404)
+
+        handler.do_GET()
+
+        handler.send_response.assert_called_with(404)
 
     def test_response_includes_json_body(self):
         handler = _make_handler()
@@ -306,15 +314,46 @@ class TestUnknownRoutes:
     """The check server answers exactly one path: no CORS, no /metrics, no
     health endpoint."""
 
-    def test_the_handler_returns_after_a_404_rather_than_scoring(self):
-        """The sibling test above uses a send_error that raises, so it never
-        reaches the return. This one lets send_error behave, which proves the
-        request is not scored afterwards.
-        """
+    def test_an_unknown_path_is_not_scored(self):
         handler = _make_handler(path="/metrics")
-        handler.send_error = MagicMock()
 
         handler.do_GET()
 
-        handler.send_error.assert_called_once_with(404)
         handler.scorer.score_request.assert_not_called()
+
+    def test_the_body_explains_what_this_server_is(self):
+        """A bare 404 is a useless answer to a person who opened this in a
+        browser expecting the UI. The server knows exactly what they did."""
+        handler = _make_handler(path="/")
+
+        handler.do_GET()
+
+        body = handler.wfile.getvalue().decode()
+        assert "/check" in body
+        assert "microguard dashboard" in body
+
+    def test_the_body_is_plain_text(self):
+        handler = _make_handler(path="/")
+
+        handler.do_GET()
+
+        sent = [call.args for call in handler.send_header.call_args_list]
+        assert ("Content-Type", "text/plain; charset=utf-8") in sent
+
+    def test_the_curl_example_uses_the_port_actually_bound(self):
+        """A hardcoded port would hand the reader a command that fails
+        whenever the server is not on the default."""
+        handler = _make_handler(path="/")
+        handler.server.server_address = ("127.0.0.1", 9999)
+
+        handler.do_GET()
+
+        assert "127.0.0.1:9999/check" in handler.wfile.getvalue().decode()
+
+    def test_the_check_route_is_unaffected(self):
+        handler = _make_handler()
+
+        handler.do_GET()
+
+        handler.send_response.assert_called_with(200)
+        handler.scorer.score_request.assert_called_once()

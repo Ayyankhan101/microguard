@@ -158,6 +158,17 @@ than a regression.
     `FileNotFoundError` from a bare `open()` inside `detect_format`, not the
     handler it was named for. It now passes an explicit format and matches the
     message.
+- **The check server answered a browser with a bare 404.** `microguard serve`
+  is the nginx `auth_request` backend, with one route and per-request logging
+  suppressed, so a healthy server looks dead: the terminal stays blank, the
+  prompt never returns, and opening `http://127.0.0.1:8400` in a browser
+  produced the stdlib 404 page with no explanation. It now answers any path
+  other than `/check` with plain text naming `/check`, pointing at
+  `microguard dashboard` for the UI, and giving a working `curl` line built
+  from the address actually bound rather than a hardcoded 8400. The status is
+  still exactly 404 — nginx turns anything outside 2xx/401/403 into a 500, so a
+  misconfigured `proxy_pass` must keep behaving as it did. The startup banner
+  gained a matching line.
 - **The blocked-IP set grew without bound.** `mg:v1:blocked_ips` held one entry
   per distinct blocked address, `ZINCRBY`'d on every block and never trimmed or
   expired — the only structure in the system that grew with the number of

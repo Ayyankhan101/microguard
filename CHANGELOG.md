@@ -3,6 +3,57 @@
 ## [Unreleased]
 
 ### Added
+- **Real-time inline blocking** (`microguard/live/`, spec 0001) — the live path
+  that had shipped across seven commits without a changelog entry:
+  - `microguard serve` — a threaded stdlib HTTP server answering nginx
+    `auth_request` on `GET /check` with 200/403 plus the full decision as JSON
+    and `X-Microguard-*` headers.
+  - `MicroguardASGI` / `MicroguardWSGI` — the same scoring in-process for
+    FastAPI/Starlette and Flask/WSGI apps.
+  - `LiveScorer` — the one place real-time scoring happens; returns the whole
+    decision (blended score, model score, heuristic label/confidence/reason),
+    not just the verdict.
+  - `RedisSessionStateStore` — session history as a capped Redis LIST
+    (`live:v2:{ip}`, 200 entries, sliding TTL), appended and read back in one
+    atomic pipeline. The earlier get/mutate/set shape lost concurrent appends
+    from the same actor: 9 of 20 survived under load.
+  - `scoring.compute_combined_score()` — the single blend, shared by `scan`,
+    `watch` and the live path.
+  - Six Diataxis documents under `docs/` covering the live path.
+- **Web dashboard** — `microguard dashboard` serves a TypeScript SPA and its API
+  on one port (default `127.0.0.1:8500`):
+  - Live tab: decisions streamed over SSE, a score histogram, most-blocked IPs,
+    and loud treatment of the two states that silently change every verdict —
+    no model loaded, and failing open.
+  - Scan tab: upload or pick a bundled log, re-slice verdicts against a
+    threshold client-side, open any session's 19 features, and export through
+    the existing `report.py` formatters.
+  - Model tab: the 19 → 4 → 1 network, per-input influence, and a confusion
+    matrix / ROC / score distribution that move with the threshold. A perfect
+    result is labelled as a caution, not a win.
+  - `gui/` — Vite + React + TypeScript, 87 tests. The build is copied into
+    `microguard/dashboard/static/` and shipped in the wheel, so running the
+    dashboard never needs Node. New `dashboard` extra.
+- **Decision recording** — `microguard/events.py` (`DecisionRecorder` protocol,
+  in-memory implementation) and `microguard/live/redis_events.py` (Redis-backed,
+  `mg:v1:` keys). `LiveScorer` tees every decision to it, including the
+  `automated-integration` short circuit. Recorder failures are logged and
+  swallowed: recording exists for the dashboard, blocking exists for the site,
+  and the second must never depend on the first.
+- **Runtime block threshold** — `RedisRuntimeConfig` stores an override in
+  `mg:v1:config`, and `LiveScorer` reads it once per request (cached ~5s). The
+  dashboard can move the live threshold with `--allow-config-writes`, and every
+  scoring process sharing that Redis follows within seconds, without a restart
+  dropping in-flight sessions. An unreachable or unreadable config leaves the
+  configured threshold standing.
+- `block_threshold` added to the decision payload — the bar the request was
+  actually judged against. `null` on the fail-open payload, where no threshold
+  was consulted.
+- `microguard dashboard --token` — a shared secret required in
+  `X-Microguard-Token` on every `/api` request, for deployments that cannot stay
+  on loopback.
+- `docs/howto-run-the-dashboard.md`, plus a Dashboard API section in
+  `docs/reference-live-api.md`.
 - `tests/conftest.py` — shared `make_entry`/`make_session`/`nginx_log_file`
   fixtures, replacing three near-identical hand-rolled `_make_entry` copies
   across `test_features.py`, `test_labeler_rules.py`.

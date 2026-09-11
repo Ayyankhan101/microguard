@@ -38,6 +38,7 @@ $ microguard scan access.log
 - **Live URL probing** — fingerprints how automated/hardened an HTTP or WebSocket endpoint looks from a single probe. This is *not* visitor classification (it scores the tool's own request against the target, not third-party traffic) — use `scan` against access logs for that
 - **Continuous monitoring** — watch mode tails log files in real time
 - **Real-time blocking** — nginx auth_request server or in-process ASGI/WSGI middleware blocks bots at the edge before they reach your app
+- **Web dashboard** — `microguard dashboard` serves a TypeScript UI on localhost: live blocking decisions as they happen, an interactive scan explorer, and the model's evaluation. Bundled with the package; no Node needed to run it
 - **Multiple output formats** — terminal, JSON, colored JSON, and HTML reports
 - **Auto-generated firewall rules** — nginx deny-list or Cloudflare Firewall Rule expression for DANGER-scored IPs
 - **Score interpretation** — SAFE / LOW / WARNING / DANGER risk labels
@@ -250,6 +251,7 @@ single-endpoint GraphQL app, which is why they do not get to block on their own.
 [deploy behind nginx](docs/howto-deploy-behind-nginx.md) ·
 [deploy in-process](docs/howto-deploy-in-process.md) ·
 [tune blocking](docs/howto-tune-blocking.md) ·
+[run the dashboard](docs/howto-run-the-dashboard.md) ·
 [API reference](docs/reference-live-api.md) ·
 [how it works](docs/explanation-how-blocking-works.md)
 
@@ -282,6 +284,40 @@ Install with: `pip install microguard[live,fastapi]` or `pip install microguard[
 Headers returned by the server:
 - `X-Microguard-Label`: `human` or `bot`
 - `X-Microguard-Score`: float score (0.0–1.0)
+
+## Dashboard
+
+```bash
+pip install 'microguard[dashboard,live]'
+microguard dashboard          # http://127.0.0.1:8500
+```
+
+Three tabs, one page:
+
+- **Live** — every decision the check server and the middleware made, streamed over
+  SSE. Each row plots what the rules said, what the model said, where the blend
+  landed, and where the threshold sat, on one scale. Two states that quietly change
+  every verdict — no model loaded, and failing open — are called out rather than
+  buried.
+- **Scan** — drop in an access log or pick a bundled sample, then move the bot
+  threshold and watch the verdicts re-slice without re-parsing. Every session opens
+  to its 19 features and the rule that fired. Exports the same JSON, HTML, nginx and
+  Cloudflare output the CLI produces.
+- **Model** — the 19 → 4 → 1 network, what each input contributes, and a confusion
+  matrix, ROC and score distribution that move with the threshold.
+
+The dashboard binds loopback and has no accounts. With `--allow-config-writes` it
+can move the live block threshold — every scoring process sharing that Redis picks
+the change up within seconds, with no restart. Use `--token` if it has to be
+reachable from elsewhere.
+
+**Building the UI from a source checkout** (a pip install already ships it):
+
+```bash
+cd gui && npm ci && npm run build
+```
+
+See [how to run the dashboard](docs/howto-run-the-dashboard.md).
 
 ## Score Interpretation
 

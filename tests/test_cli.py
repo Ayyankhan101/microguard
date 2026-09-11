@@ -404,3 +404,72 @@ class TestBaseInstallImports:
             check=False,  # the assertion below reports the failure with stderr
         )
         assert result.returncode == 0, result.stderr
+
+
+class TestDashboardCommand:
+    """`microguard dashboard` — the whole GUI is one command."""
+
+    def _run(self, monkeypatch, argv):
+        import sys
+
+        from microguard.cli import main
+
+        monkeypatch.setattr(sys, 'argv', ['microguard'] + argv)
+        try:
+            main()
+        except SystemExit as exc:
+            return exc.code
+        return 0
+
+    def test_dispatches_to_the_dashboard_server(self, monkeypatch):
+        calls = {}
+
+        def fake_run(**kwargs):
+            calls.update(kwargs)
+
+        monkeypatch.setattr('microguard.dashboard.server.run_dashboard', fake_run)
+        code = self._run(monkeypatch, ['dashboard'])
+
+        assert code == 0
+        assert calls['host'] == '127.0.0.1'
+        assert calls['port'] == 8500
+
+    def test_passes_through_host_port_and_redis_url(self, monkeypatch):
+        calls = {}
+
+        monkeypatch.setattr(
+            'microguard.dashboard.server.run_dashboard', lambda **kw: calls.update(kw)
+        )
+        self._run(
+            monkeypatch,
+            [
+                'dashboard',
+                '--host', '0.0.0.0',
+                '--port', '9100',
+                '--redis-url', 'redis://elsewhere:6380',
+            ],
+        )
+
+        assert calls['host'] == '0.0.0.0'
+        assert calls['port'] == 9100
+        assert calls['redis_url'] == 'redis://elsewhere:6380'
+
+    def test_config_writes_are_off_unless_asked_for(self, monkeypatch):
+        calls = {}
+
+        monkeypatch.setattr(
+            'microguard.dashboard.server.run_dashboard', lambda **kw: calls.update(kw)
+        )
+        self._run(monkeypatch, ['dashboard'])
+
+        assert calls['allow_config_writes'] is False
+
+    def test_config_writes_can_be_enabled(self, monkeypatch):
+        calls = {}
+
+        monkeypatch.setattr(
+            'microguard.dashboard.server.run_dashboard', lambda **kw: calls.update(kw)
+        )
+        self._run(monkeypatch, ['dashboard', '--allow-config-writes'])
+
+        assert calls['allow_config_writes'] is True

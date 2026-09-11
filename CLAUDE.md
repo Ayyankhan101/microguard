@@ -12,10 +12,17 @@ Bot Traffic Audit Tool powered by micrograd. Detects malicious bot traffic in AP
   - `model.py` — micrograd MLP wrapper
   - `scanner.py` — HTTP scanner for live probing
   - `report.py` — Terminal + JSON + HTML output
+  - `events.py` — DecisionRecorder protocol + in-memory recorder (no Redis
+    needed, unlike everything under `live/`)
+  - `live/` — Real-time blocking: check server, ASGI/WSGI middleware, Redis
+    session store, decision recording, runtime config
+  - `dashboard/` — FastAPI app serving the API and the built SPA
   - `training/` — Training pipeline
+- `gui/` — TypeScript dashboard (Vite + React). `npm run build` writes
+  `microguard/dashboard/static/`, which ships in the wheel
 - `docs/` — Diataxis documentation for the live blocking path
   (tutorial / how-to / reference / explanation)
-- `tests/` — pytest tests (69 passing)
+- `tests/` — pytest tests (497 passing); `gui/src/**/*.test.*` — vitest (87 passing)
 - `data/` — Model weights, sample logs
 
 ## Commands
@@ -24,6 +31,11 @@ Bot Traffic Audit Tool powered by micrograd. Detects malicious bot traffic in AP
 python -m pytest tests/              # Run tests
 microguard scan <logfile>            # Scan log file
 microguard probe <url>               # Probe live URL
+microguard dashboard                 # Web UI on 127.0.0.1:8500
+
+cd gui && npm test                   # Frontend tests
+cd gui && npm run build              # Build the SPA into the Python package
+python gui/scripts/capture_fixtures.py   # Recapture API fixtures after a shape change
 ```
 
 ## Health Stack
@@ -31,7 +43,8 @@ microguard probe <url>               # Probe live URL
 - typecheck: mypy microguard
 - lint: ruff check .
 - test: pytest
-- coverage: pytest --cov=microguard --cov-report=term-missing (baseline: 71%; no hard gate yet — see CHANGELOG)
+- coverage: pytest --cov=microguard --cov-report=term-missing (baseline: 77%; no hard gate yet — see CHANGELOG)
+- frontend: cd gui && npx tsc -b && npm test
 - deadcode: vulture microguard microguard/vulture_whitelist.py
 - shell: skip (no shell scripts)
 
@@ -47,7 +60,12 @@ microguard probe <url>               # Probe live URL
   `TestWatchLogfile` in `tests/test_watch.py`), not just their helpers —
   keep new CLI/watch behavior covered there, not only at the unit level.
 - `watch_logfile()` takes a test-only `_max_iterations` param to terminate
-  its otherwise-infinite loop; don't use it from product code.
+  its otherwise-infinite loop; don't use it from product code. The dashboard's
+  `decision_stream()` has the same seam, named `_max_ticks`.
+- The zod schemas in `gui/src/api/schemas.ts` are checked against real API
+  payloads captured in `gui/src/api/__fixtures__/`. Change a Python response
+  shape and you must rerun `gui/scripts/capture_fixtures.py` — CI fails on
+  stale fixtures.
 
 ## Skill routing
 

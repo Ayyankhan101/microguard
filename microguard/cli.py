@@ -299,6 +299,43 @@ def main():
              'spoofable session key defeats detection.'
     )
 
+    # dashboard command — API + built SPA on one port
+    dashboard_parser = subparsers.add_parser(
+        'dashboard',
+        help='Start the web dashboard (live traffic, scans, model)'
+    )
+    dashboard_parser.add_argument(
+        '--host',
+        default='127.0.0.1',
+        help='Bind address (default: 127.0.0.1). The dashboard has no auth — '
+             'binding off loopback exposes every decision, and with '
+             '--allow-config-writes the blocking threshold itself.'
+    )
+    dashboard_parser.add_argument(
+        '--port',
+        type=int,
+        default=8500,
+        help='Listen port (default: 8500)'
+    )
+    dashboard_parser.add_argument(
+        '--redis-url',
+        default='redis://localhost:6379',
+        help='Redis the live path writes to (default: redis://localhost:6379). '
+             'Unreachable means the live tab is empty; scan and model still work.'
+    )
+    dashboard_parser.add_argument(
+        '--token',
+        default=None,
+        help='Require this shared secret in an X-Microguard-Token header on every '
+             '/api request. For when loopback binding is not an option.'
+    )
+    dashboard_parser.add_argument(
+        '--allow-config-writes',
+        action='store_true',
+        help='Let the dashboard change the live block threshold. Off by default '
+             'because it decides who gets blocked on a running site.'
+    )
+
     # probe command
     probe_parser = subparsers.add_parser(
         'probe',
@@ -532,6 +569,16 @@ def main():
             block_threshold=args.block_threshold,
             session_ttl=args.session_ttl,
             trust_forwarded_for=args.trust_forwarded_for,
+        )
+
+    elif args.command == 'dashboard':
+        from .dashboard.server import run_dashboard
+        run_dashboard(
+            host=args.host,
+            port=args.port,
+            redis_url=args.redis_url,
+            allow_config_writes=args.allow_config_writes,
+            token=args.token,
         )
 
     elif args.command == 'info':

@@ -32,7 +32,7 @@ jobs:
           # base install turns the whole directory into a COLLECTION ERROR rather
           # than a skip. The Redis-backed tests themselves skip cleanly without a
           # server; the `live` job below provides one.
-          pip install -e ".[live,fastapi,flask]"
+          pip install -e ".[live,fastapi,flask,dashboard]"
           pip install pytest pytest-cov
 
       - name: Run tests
@@ -87,7 +87,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -e ".[live,fastapi,flask]"
+          pip install -e ".[live,fastapi,flask,dashboard]"
           pip install pytest
 
       - name: Run live suite against a real Redis
@@ -101,5 +101,52 @@ jobs:
           python -m pytest tests/live/ -q -rs 2>&1 | tee /tmp/live.txt
           if grep -q "Redis not available" /tmp/live.txt; then
             echo "::error::live suite skipped - the Redis service did not come up"
+            exit 1
+          fi
+
+  gui:
+    # The TypeScript dashboard. Node is needed to build and test it; running
+    # `microguard dashboard` never is, because the build ships in the wheel.
+    name: gui (TypeScript)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: gui/package-lock.json
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[live,fastapi,flask,dashboard]"
+          cd gui && npm ci
+
+      - name: Typecheck
+        run: cd gui && npx tsc -b
+
+      - name: Test
+        run: cd gui && npm test
+
+      - name: Build
+        run: cd gui && npm run build
+
+      - name: Fail if the captured fixtures have drifted from the API
+        run: |
+          # gui/src/api/__fixtures__ holds real payloads, and the zod schemas
+          # are checked against them. If the Python side changes shape and the
+          # fixtures are not recaptured, the schemas keep passing against stale
+          # data and the drift only shows up in a browser.
+          python gui/scripts/capture_fixtures.py
+          if ! git diff --exit-code -- gui/src/api/__fixtures__; then
+            echo "::error::API fixtures are stale - run 'python gui/scripts/capture_fixtures.py' and commit the result"
             exit 1
           fi

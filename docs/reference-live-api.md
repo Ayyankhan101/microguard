@@ -131,6 +131,7 @@ any 403.
 | `request_count` | int | Requests in the retained session history (capped at 200). |
 | `duration` | float | Seconds spanned by the retained history. |
 | `model_loaded` | bool | Whether the model contributed at all. |
+| `block_threshold` | float \| null | The bar this request was judged against, after any runtime override. `null` on the fail-open payload, where no threshold was consulted. |
 | `reason` | str | Alias of `heuristic_reason`, kept for older callers. |
 
 ```json
@@ -144,7 +145,8 @@ any 403.
   "heuristic_reason": "vulnerability scanner pattern detected",
   "request_count": 3,
   "duration": 0.0041,
-  "model_loaded": true
+  "model_loaded": true,
+  "block_threshold": 0.85
 }
 ```
 
@@ -163,6 +165,45 @@ read response headers, not bodies.
 
 ---
 
+## Dashboard API
+
+Served by `microguard dashboard` (default `127.0.0.1:8500`). See
+[how to run the dashboard](howto-run-the-dashboard.md).
+
+| Method | Path | Returns |
+|---|---|---|
+| GET | `/api/health` | `{version, model_loaded, redis_connected}` |
+| GET | `/api/live/stats` | Counters since the recorder started, plus a 20-bucket score histogram and the most-blocked IPs. |
+| GET | `/api/live/events?limit=` | Recent decisions, newest first, each with a `ts`. Capped at 1000. |
+| GET | `/api/live/stream` | Server-sent events: `stats` every 2s, `decision` per new decision. |
+| GET | `/api/live/config` | `{block_threshold, writable}`. `block_threshold` is `null` when no override is set. |
+| PUT | `/api/live/config` | Sets the override. `403` unless started with `--allow-config-writes`, `503` without a shared Redis. |
+| GET | `/api/scan/samples` | Log files bundled in `data/`. |
+| POST | `/api/scan` | Scans a bundled sample. Body is `scan_logfile()`'s dict, unchanged. |
+| POST | `/api/scan/upload` | Scans an uploaded file. 64 MB cap; the temp file is deleted afterwards. |
+| POST | `/api/scan/export` | Renders a result through `report.py`. Always `text/plain` with an attachment disposition — `format_html()` does not escape its input. |
+| GET | `/api/model` | Architecture, weights, feature names, normalization ranges. |
+| POST | `/api/model/evaluate` | Confusion matrix, precision/recall/F1/accuracy, ROC and score distribution on the held-out or adversarial set. |
+
+With `--token`, every `/api` request needs a matching `X-Microguard-Token`.
+
+### Decision recording
+
+`mg:v1:` keys, written by whichever process scores:
+
+| Key | Type | Contents |
+|---|---|---|
+| `mg:v1:events` | LIST | JSON decisions, newest first, capped at 1000 |
+| `mg:v1:counters` | HASH | `total`, `blocked`, `score_sum` |
+| `mg:v1:hist` | HASH | bucket index `0`-`19` → count |
+| `mg:v1:blocked_ips` | ZSET | IP → times blocked |
+| `mg:v1:config` | HASH | `block_threshold` → float, absent when there is no override |
+
+Counters are cumulative rather than derived from the ring, so totals do not shrink
+as old decisions scroll out of it.
+
+---
+
 ## Python API
 
 ### `LiveScorer`
@@ -171,8 +212,14 @@ read response headers, not bodies.
 from microguard.live.scorer import LiveScorer
 
 LiveScorer(store, model_path=None, block_threshold=0.85,
-           session_ttl=1800, short_circuit_label="automated-integration")
+           session_ttl=1800, short_circuit_label="automated-integration",
+           recorder=None, threshold_source=lambda: None)
 ```
+
+| Argument | Type | Default | Notes |
+|---|---|---|---|
+| `recorder` | `DecisionRecorder` \| None | `None` | Where each decision is stored for the dashboard. Errors from it are logged and swallowed; recording can never change or delay a verdict. |
+| `threshold_source` | `() -> float \| None` | returns `None` | Consulted once per request. A value overrides `block_threshold`; `None`, or a raise, leaves the configured value standing. |
 
 | Parameter | Type | Default | Notes |
 |---|---|---|---|

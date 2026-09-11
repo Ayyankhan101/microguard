@@ -71,6 +71,13 @@
   overall; no hard gate yet.
 
 ### Fixed
+- **`tests/test_model.py::test_train_step` was a 2%-per-run flake** — it built
+  an unseeded `BotDetector`, and on roughly 2% of random inits every hidden
+  ReLU sits at zero for both of its input patterns, leaving the output bias as
+  the only live gradient. The batch is symmetric (ten targets at +1, ten at
+  -1), so that gradient cancels exactly, the model does not move, and the
+  assertion fails through no fault of the code. Across a 12-job CI matrix that
+  is close to a coin flip per run. Seeded, with the mechanism written down.
 - **The dashboard's SPA fallback swallowed `/api` 404s on Windows** — the
   guard read the path StaticFiles hands its handler, which is
   `os.sep`-normalized, so `api\nope` never matched a `"api/"` check and a

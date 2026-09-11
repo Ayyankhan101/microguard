@@ -1,5 +1,6 @@
 """Tests for the micrograd model wrapper."""
 
+import random
 
 import pytest
 
@@ -53,7 +54,17 @@ class TestBotDetector:
         assert model.predict(features) == model2.predict(features)
     
     def test_train_step(self):
-        """Test that training reduces loss."""
+        """A training step moves the model.
+
+        Seeded, and not for tidiness. micrograd initializes weights with
+        random.uniform, and on roughly 2% of inits every hidden ReLU sits at
+        zero for both input patterns below. The only live gradient left is the
+        output bias, and this batch is symmetric — ten targets at +1, ten at
+        -1 — so that gradient cancels exactly and nothing moves. Unseeded, the
+        assertion fails about 2% of the time through no fault of the code,
+        which across a 12-job CI matrix is close to a coin flip per run.
+        """
+        random.seed(1234)
         model = BotDetector()
         
         # Simple training data

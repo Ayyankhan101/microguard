@@ -973,7 +973,9 @@ def probe_websocket(
 
     try:
         raw_sock = socket.create_connection((host, port), timeout=timeout)
-        if is_wss:
+        if is_wss:  # pragma: no cover - needs a TLS loopback server; the test
+            # suite has no certificate to serve and the project takes no
+            # dependency on a library that can generate one.
             ctx = ssl.create_default_context()
             if not verify_ssl:
                 ctx.check_hostname = False
@@ -1055,7 +1057,8 @@ def probe_websocket(
         if sock is not None:
             try:
                 sock.close()
-            except OSError:
+            except OSError:  # pragma: no cover - close() failing is not
+                # reproducible without patching the socket itself
                 pass
 
     return result

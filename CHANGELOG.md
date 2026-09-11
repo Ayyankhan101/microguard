@@ -3,6 +3,83 @@
 ## [Unreleased]
 
 ### Added
+- **Test coverage raised from 77% to 100%**, 502 tests to 776. The number is
+  the side effect; the work was fixing tests that could not fail and covering
+  detection logic that had never run.
+  - `labeler.py` 85% → 100%: all 21 previously-unexercised rule returns,
+    including the WAF protected-endpoint scan, API-key scanning, credential
+    and POST brute-force, botnet signatures, directory brute-force, UA
+    rotation, HTTP/1.0-only, and the sustained-rate rule. Plus the two
+    exemptions that exist to prevent false positives — a GraphQL session must
+    not trip the single-endpoint rules, and a gRPC session must not trip
+    uniform timing — and a guard test pinning evaluation order itself.
+  - `training/` 0% → 100%: `generate.py`, `train.py` and
+    `build_real_dataset.py`. Every writing path is redirected to `tmp_path`;
+    `build_dataset` runs against fixtures in milliseconds rather than the 98
+    seconds the real corpus takes.
+  - `scanner.py` 77% → 100%, without adding network egress. New
+    `tests/test_scanner_http.py` runs a loopback `ThreadingHTTPServer`,
+    following the pattern `test_scanner_ws.py` already used, which covers
+    `probe_url_multiple` and `probe_and_analyze` — both previously untouched.
+  - `model.py` 70% → 100%: `BotDetector.train` had no test at all.
+  - Live-path gaps: `LiveSession.add_request` (no test had ever called it),
+    the ASGI middleware's fail-open path (the WSGI one was covered), and
+    `_extract_ip`'s `trust_forwarded_for` branch, which is a documented trust
+    boundary.
+  - Two of the 19 features, `method_mismatch_count` and
+    `max_sustained_click_rate`, had never been computed as anything but zero.
+  - CI now gates at `--cov-fail-under=98`.
+- **Real-time inline blocking** (`microguard/live/`, spec 0001) — the live path
+  that had shipped across seven commits without a changelog entry:
+  - `microguard serve` — a threaded stdlib HTTP server answering nginx
+    `auth_request` on `GET /check` with 200/403 plus the full decision as JSON
+    and `X-Microguard-*` headers.
+  - `MicroguardASGI` / `MicroguardWSGI` — the same scoring in-process for
+    FastAPI/Starlette and Flask/WSGI apps.
+  - `LiveScorer` — the one place real-time scoring happens; returns the whole
+    decision (blended score, model score, heuristic label/confidence/reason),
+    not just the verdict.
+  - `RedisSessionStateStore` — session history as a capped Redis LIST
+    (`live:v2:{ip}`, 200 entries, sliding TTL), appended and read back in one
+    atomic pipeline. The earlier get/mutate/set shape lost concurrent appends
+    from the same actor: 9 of 20 survived under load.
+  - `scoring.compute_combined_score()` — the single blend, shared by `scan`,
+    `watch` and the live path.
+  - Six Diataxis documents under `docs/` covering the live path.
+- **Web dashboard** — `microguard dashboard` serves a TypeScript SPA and its API
+  on one port (default `127.0.0.1:8500`):
+  - Live tab: decisions streamed over SSE, a score histogram, most-blocked IPs,
+    and loud treatment of the two states that silently change every verdict —
+    no model loaded, and failing open.
+  - Scan tab: upload or pick a bundled log, re-slice verdicts against a
+    threshold client-side, open any session's 19 features, and export through
+    the existing `report.py` formatters.
+  - Model tab: the 19 → 4 → 1 network, per-input influence, and a confusion
+    matrix / ROC / score distribution that move with the threshold. A perfect
+    result is labelled as a caution, not a win.
+  - `gui/` — Vite + React + TypeScript, 87 tests. The build is copied into
+    `microguard/dashboard/static/` and shipped in the wheel, so running the
+    dashboard never needs Node. New `dashboard` extra.
+- **Decision recording** — `microguard/events.py` (`DecisionRecorder` protocol,
+  in-memory implementation) and `microguard/live/redis_events.py` (Redis-backed,
+  `mg:v1:` keys). `LiveScorer` tees every decision to it, including the
+  `automated-integration` short circuit. Recorder failures are logged and
+  swallowed: recording exists for the dashboard, blocking exists for the site,
+  and the second must never depend on the first.
+- **Runtime block threshold** — `RedisRuntimeConfig` stores an override in
+  `mg:v1:config`, and `LiveScorer` reads it once per request (cached ~5s). The
+  dashboard can move the live threshold with `--allow-config-writes`, and every
+  scoring process sharing that Redis follows within seconds, without a restart
+  dropping in-flight sessions. An unreachable or unreadable config leaves the
+  configured threshold standing.
+- `block_threshold` added to the decision payload — the bar the request was
+  actually judged against. `null` on the fail-open payload, where no threshold
+  was consulted.
+- `microguard dashboard --token` — a shared secret required in
+  `X-Microguard-Token` on every `/api` request, for deployments that cannot stay
+  on loopback.
+- `docs/howto-run-the-dashboard.md`, plus a Dashboard API section in
+  `docs/reference-live-api.md`.
 - `tests/conftest.py` — shared `make_entry`/`make_session`/`nginx_log_file`
   fixtures, replacing three near-identical hand-rolled `_make_entry` copies
   across `test_features.py`, `test_labeler_rules.py`.
@@ -19,7 +96,104 @@
   `pyproject.toml` pytest/coverage config, wired into CI. Baseline: 71%
   overall; no hard gate yet.
 
+### Known defects, recorded rather than fixed
+
+These surfaced while writing the tests above. Each is pinned by a test that
+names it as a defect, so the eventual fix reads as a deliberate change rather
+than a regression.
+
+- **Train/serve normalization skew.** `training/train.py` maps a zero-range
+  feature column to `0.5`; `model.py`'s `predict()` maps the same column to
+  `0.0`. The network is therefore served an input it never saw in training.
+  One column is affected in the shipped model (`method_mismatch_count`, which
+  is constant in the training data). Measured end-to-end score shift: 0.007
+  mean, 0.097 worst case — small, but a 0.097 shift beside a 0.85 threshold can
+  flip a borderline block. Fixing it means choosing a side and retraining, so
+  it belongs in its own change.
+- **Heuristic rule 22 is unreachable.** `Cloudflare-protected site, normal
+  browser` (human, 0.65) exists to protect a real visitor whose UA carries a
+  CDN marker. Rule 5 returns `bot` at 0.90 for any UA matching the same CDN
+  pattern, seventeen rules earlier, so such a visitor is labeled a bot instead.
+  Marked `# pragma: no cover` in the source with the explanation.
+- **The synthetic top-up cap does not do what its comment says.**
+  `build_real_dataset.py` says the cap keeps "real data the majority of the bot
+  class", but it caps synthetic rows at 30% of a *target* derived from the human
+  count. With a thin real-bot corpus the synthetic share reaches 60-75%. It
+  does not bite today (2,500 real bots against 1,000 humans yields zero
+  synthetic rows) but would if the corpus shrank.
+- **`build_dataset` raises on an empty corpus.** With no sessions and no human
+  class, the final `zip(*combined)` unpacks an empty list and raises
+  `ValueError`.
+- **`data/real_bot_training_data.json` is stale.** Rebuilding it today yields
+  3,511 samples against the committed 3,580 (`heuristic_real` 2,029 versus
+  2,098), because `label_session` has changed since it was generated. The
+  `ground_truth` count is stable at 482 and is pinned as a regression anchor.
+
 ### Fixed
+- **Eleven tests passed while exercising different code than their names
+  claimed.** Coverage found them; the defect underneath is an assertion too
+  weak to fail.
+  - `tests/test_labeler_rules.py` (8): `label_session` evaluates ~24 rules in
+    order and returns on first match, and every bot rule returns the label
+    `bot`. Each of these tests built its session with a convenient bot-shaped
+    user agent (`Go-http-client/1.1`, `python-requests`, `Bot0/1.0`) that
+    tripped rule 1 or rule 3 long before the rule under test, then asserted
+    only `label == 'bot'`. The directory-brute-force test exercised the
+    known-bot-UA rule; the UA-rotation test exercised uniform timing; and so
+    on. Thirteen of the ~24 detection rules had never executed in any test run.
+    Every rule test now asserts the reason string and the confidence, which
+    together identify a rule uniquely, and the sessions were rebuilt to reach
+    the rule they name.
+  - `tests/test_scanner.py` (2): `test_probe_bad_ssl` reached out to
+    `self-signed.badssl.com` and asserted `timing >= 0`, true whether the
+    probe succeeded, was refused, or never left the machine — on all 12 CI
+    matrix jobs. Replaced with a loopback refusal that asserts an actual error.
+  - `tests/test_parser.py` (1): `test_parse_missing_file` caught the
+    `FileNotFoundError` from a bare `open()` inside `detect_format`, not the
+    handler it was named for. It now passes an explicit format and matches the
+    message.
+- **Twelve `open()` calls in the package had no explicit encoding** — in
+  `model.py`, `training/train.py`, `training/build_real_dataset.py` and
+  `training/generate.py`. Without one, Python falls back to the OS locale
+  encoding, so `model.json` and every training artifact round-trip differently
+  on a Windows host than on Linux. Latent rather than live, since `json.dump`
+  writes ASCII by default, but it is the same defect `parser.py::_open_text`
+  was fixed for, and the test suite hit the reading half of it on the Windows
+  CI jobs. Found by sweeping with `PYTHONWARNDEFAULTENCODING`, which now
+  reports nothing for the package or the suite.
+- **`microguard/training/generate.py` wrote outside the repo's data
+  directory** — its `__main__` block walked two `dirname`s instead of three, so
+  `python -m microguard.training.generate` created
+  `microguard/data/training_data.json` inside the package rather than
+  `data/training_data.json`. `train.py` does the same walk correctly.
+- **`docs/howto-retrain-the-model.md` claimed training takes "seconds, not
+  hours"** — measured at 2 to 3 minutes for a full run, about 100x the
+  implied figure. Corrected with the measurement.
+- **`tests/test_model.py::test_train_step` was a 2%-per-run flake** — it built
+  an unseeded `BotDetector`, and on roughly 2% of random inits every hidden
+  ReLU sits at zero for both of its input patterns, leaving the output bias as
+  the only live gradient. The batch is symmetric (ten targets at +1, ten at
+  -1), so that gradient cancels exactly, the model does not move, and the
+  assertion fails through no fault of the code. Across a 12-job CI matrix that
+  is close to a coin flip per run. Seeded, with the mechanism written down.
+- **The dashboard's SPA fallback swallowed `/api` 404s on Windows** — the
+  guard read the path StaticFiles hands its handler, which is
+  `os.sep`-normalized, so `api\nope` never matched a `"api/"` check and a
+  mistyped endpoint returned 200 with the HTML shell instead of a JSON 404.
+  The decision now comes from the ASGI scope's request path, extracted as
+  `_is_api_path()` and unit-tested on both platforms' shapes.
+- **Captured API fixtures could never match on a second run** — the live
+  decisions in `gui/src/api/__fixtures__` were scored through a store that
+  stamps `time.time()`, so `duration`, every timing feature derived from it,
+  and therefore `model_score` changed on every capture. The capture store now
+  anchors the session clock to the log's own timestamps, which also makes the
+  fixtures realistic (a 34s browser session rather than a 1.7ms artifact).
+- **`microguard probe <url> --verbose` crashed with a `TypeError`** — `cli.py`
+  called `format_probe_report(results, verbose=True)`, but that function has
+  never taken a `verbose` argument. The function that does the verbose
+  rendering, `format_probe_verbose()`, sat unused next to it; it is now wired
+  in, and `probe --verbose` is covered in `tests/test_cli.py`. This was the
+  last remaining `vulture` finding in the package.
 - **`watch.py` had the same heuristic/model score-blending asymmetry bug
   already fixed in `cli.py`** — an independent, undiscovered copy of the
   same logic. A confident heuristic 'human' call (e.g. a GraphQL session)

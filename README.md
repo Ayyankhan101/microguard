@@ -37,6 +37,8 @@ $ microguard scan access.log
 - **micrograd neural network** — 85 parameters, ~1.8KB model size, trained on real ground-truth-labeled attack traffic + real human sessions (see [Model Training](#model-architecture))
 - **Live URL probing** — fingerprints how automated/hardened an HTTP or WebSocket endpoint looks from a single probe. This is *not* visitor classification (it scores the tool's own request against the target, not third-party traffic) — use `scan` against access logs for that
 - **Continuous monitoring** — watch mode tails log files in real time
+- **Real-time blocking** — nginx auth_request server or in-process ASGI/WSGI middleware blocks bots at the edge before they reach your app
+- **Web dashboard** — `microguard dashboard` serves a TypeScript UI on localhost: live blocking decisions as they happen, an interactive scan explorer, and the model's evaluation. Bundled with the package; no Node needed to run it
 - **Multiple output formats** — terminal, JSON, colored JSON, and HTML reports
 - **Auto-generated firewall rules** — nginx deny-list or Cloudflare Firewall Rule expression for DANGER-scored IPs
 - **Score interpretation** — SAFE / LOW / WARNING / DANGER risk labels
@@ -60,6 +62,20 @@ pip install .
 
 - Python 3.10+ (the codebase uses `X | Y` union type hints throughout)
 - [micrograd](https://github.com/karpathy/micrograd) (installed automatically)
+
+## Documentation
+
+Full docs live in [`docs/`](docs/README.md), organized by what you are trying to
+do. The fastest ways in:
+
+| If you want to… | Read |
+|---|---|
+| Find bots in a log file | [Your first scan](docs/tutorial-first-scan.md) |
+| Block bots in real time | [Block your first bot](docs/tutorial-real-time-blocking.md) |
+| Watch decisions in a browser | [Watch a bot get blocked](docs/tutorial-the-dashboard.md) |
+| Look up a flag or a payload | [CLI reference](docs/reference-cli.md) · [Live API reference](docs/reference-live-api.md) |
+| Understand a verdict | [The heuristic rules](docs/reference-heuristic-rules.md) · [The 19 features](docs/reference-features.md) |
+| Judge whether to trust it | [How detection works](docs/explanation-how-detection-works.md) · [Where the labels come from](docs/explanation-training-data.md) |
 
 ## Quick Start
 
@@ -154,6 +170,172 @@ microguard scan access.log --watch
 microguard scan access.log --watch --threshold 0.5
 ```
 
+### Real-Time Blocking
+
+Block bots at the edge before they reach your app. Two deployment options:
+
+#### nginx auth_request (recommended for nginx stacks)
+
+```bash
+# Start the check server
+microguard serve --port 8400 --redis-url redis://localhost:6379
+
+# nginx config — add to your server block:
+#   location /api/ {
+#       auth_request /_microguard_check;
+#       auth_request_set $microguard_label $upstream_http_x_microguard_label;
+#       proxy_set_header X-Microguard-Label $microguard_label;
+#       proxy_pass http://backend;
+#   }
+#
+#   location = /_microguard_check {
+#       internal;
+#       proxy_pass http://127.0.0.1:8400/check;
+#       proxy_pass_request_body off;
+#       proxy_set_header Content-Length "";
+#       proxy_set_header X-Original-URI $request_uri;
+#       proxy_set_header X-Original-Method $request_method;
+#       proxy_set_header X-Real-IP $remote_addr;
+#       proxy_set_header User-Agent $http_user_agent;
+#       # Drop client-supplied X-Forwarded-For. Sessions are keyed on the
+#       # client IP, so a spoofable value lets a bot get a fresh session
+#       # per request and never build a detectable history.
+#       proxy_set_header X-Forwarded-For "";
+#   }
+```
+
+#### In-process middleware (FastAPI / Flask)
+
+```python
+# FastAPI
+from fastapi import FastAPI
+from microguard.live.middleware import MicroguardASGI
+
+app = FastAPI()
+app.add_middleware(
+    MicroguardASGI,
+    redis_url="redis://localhost:6379",
+    block_threshold=0.85,
+)
+
+# Flask
+from flask import Flask
+from microguard.live.middleware import MicroguardWSGI
+
+app = Flask(__name__)
+app.wsgi_app = MicroguardWSGI(
+    app.wsgi_app,
+    redis_url="redis://localhost:6379",
+    block_threshold=0.85,
+)
+```
+
+Every block/allow decision returns the full breakdown, not just a verdict:
+
+```json
+{
+  "ip": "203.0.113.10",
+  "label": "bot",
+  "score": 0.95,
+  "model_score": 0.87,
+  "heuristic_label": "bot",
+  "heuristic_confidence": 0.95,
+  "heuristic_reason": "vulnerability scanner pattern detected",
+  "request_count": 4,
+  "duration": 1.82,
+  "model_loaded": true
+}
+```
+
+The same fields travel as `X-Microguard-Label`, `-Score`, `-Model-Score`,
+`-Heuristic` and `-Reason` headers, so an nginx `auth_request_set` or a wrapped
+app can forward them upstream. `score` is what the decision used; `model_score`
+and `heuristic_confidence` tell you which half drove it, which is what you need
+to tune the threshold or explain a block to a customer.
+
+The default block threshold is **0.85**. The blend floors a confident heuristic
+rule at its own confidence, so the threshold decides which rules can block
+unaided: at 0.85 only the 0.90-0.95 rules do (known bot UA, scanner paths,
+attack tools, uniform timing, HTTP/1.0-only), while weaker signals like "all
+requests to one endpoint" (0.80) and "high request rate" (0.75) need the model
+to agree. Those weaker rules also describe a legitimate polling client or a
+single-endpoint GraphQL app, which is why they do not get to block on their own.
+
+**Live-path documentation:** [tutorial](docs/tutorial-real-time-blocking.md) ·
+[deploy behind nginx](docs/howto-deploy-behind-nginx.md) ·
+[deploy in-process](docs/howto-deploy-in-process.md) ·
+[tune blocking](docs/howto-tune-blocking.md) ·
+[API reference](docs/reference-live-api.md) ·
+[how it works](docs/explanation-how-blocking-works.md)
+
+**Everything else:** [the documentation index](docs/README.md).
+
+Two settings matter before you deploy:
+
+- **`trust_forwarded_for` is off by default.** The client IP comes from
+  `X-Real-IP` or the transport peer, never from the client-supplied
+  `X-Forwarded-For`. Sessions key on that IP, so a spoofable value lets a bot get
+  a fresh session per request and never build a detectable history. Turn it on
+  only behind a proxy that overwrites the header.
+- **The block threshold defaults to 0.85.** Only the highest-confidence rules
+  block on their own; weaker signals need the model to agree. See
+  [tuning](docs/howto-tune-blocking.md).
+
+If Redis is unreachable, all three entrypoints fail open: the request is allowed
+and logged rather than turned into a 500 for a real visitor.
+
+Install with: `pip install microguard[live,fastapi]` or `pip install microguard[live,flask]`
+
+#### Options
+
+```
+--host TEXT              Bind address (default: 127.0.0.1)
+--port INT               Listen port (default: 8400)
+--redis-url TEXT         Redis connection URL (default: redis://localhost:6379)
+--block-threshold FLOAT  Score above which requests are blocked (default: 0.85)
+--session-ttl INT        Session expiry in seconds (default: 1800)
+```
+
+Headers returned by the server:
+- `X-Microguard-Label`: `human` or `bot`
+- `X-Microguard-Score`: float score (0.0–1.0)
+
+## Dashboard
+
+```bash
+pip install 'microguard[dashboard,live]'
+microguard dashboard          # http://127.0.0.1:8500
+```
+
+Three tabs, one page:
+
+- **Live** — every decision the check server and the middleware made, streamed over
+  SSE. Each row plots what the rules said, what the model said, where the blend
+  landed, and where the threshold sat, on one scale. Two states that quietly change
+  every verdict — no model loaded, and failing open — are called out rather than
+  buried.
+- **Scan** — drop in an access log or pick a bundled sample, then move the bot
+  threshold and watch the verdicts re-slice without re-parsing. Every session opens
+  to its 19 features and the rule that fired. Exports the same JSON, HTML, nginx and
+  Cloudflare output the CLI produces.
+- **Model** — the 19 → 4 → 1 network, what each input contributes, and a confusion
+  matrix, ROC and score distribution that move with the threshold.
+
+The dashboard binds loopback and has no accounts. With `--allow-config-writes` it
+can move the live block threshold — every scoring process sharing that Redis picks
+the change up within seconds, with no restart. Use `--token` if it has to be
+reachable from elsewhere.
+
+**Building the UI from a source checkout** (a pip install already ships it):
+
+```bash
+cd gui && npm ci && npm run build
+```
+
+See [watch a bot get blocked](docs/tutorial-the-dashboard.md) for a walk-through,
+[how to run the dashboard](docs/howto-run-the-dashboard.md) for the reference,
+and [working on the UI](docs/howto-work-on-the-gui.md) if you are changing it.
+
 ## Score Interpretation
 
 | Score Range | Risk Level | Meaning |
@@ -173,6 +355,7 @@ excluded from bot-rate counts entirely rather than forced into bot/human.
 ```
 microguard scan <logfile> [OPTIONS]
 microguard probe <url> [OPTIONS]
+microguard serve [OPTIONS]
 microguard info
 ```
 
@@ -392,20 +575,28 @@ microguard/
 ├── .github/workflows/test.yml  # CI: tests on push/PR
 ├── microguard/
 │   ├── __init__.py             # Package exports
-│   ├── cli.py                  # CLI entry point (scan, probe, watch, info)
+│   ├── cli.py                  # CLI entry point (scan, probe, watch, serve, info)
 │   ├── parser.py               # Nginx + JSON log parsers (transparent .gz support)
 │   ├── features.py             # 19 feature extractors
 │   ├── labeler.py              # 24+ heuristic bot/human/automated-integration rules
 │   ├── model.py                # micrograd MLP wrapper (85 params)
 │   ├── scanner.py              # HTTP + WebSocket live probing (automation fingerprint)
+│   ├── scoring.py              # Shared heuristic/model score blending (single source of truth)
 │   ├── watch.py                # Continuous log monitoring
 │   ├── report.py               # Terminal + JSON + HTML + Verbose output
+│   ├── live/
+│   │   ├── __init__.py         # Import guard (requires redis)
+│   │   ├── state.py            # LiveSession + SessionStateStore Protocol
+│   │   ├── redis_store.py      # Redis-backed session state (JSON + TTL)
+│   │   ├── scorer.py           # LiveScorer — real-time request scoring
+│   │   ├── server.py           # nginx auth_request HTTP server
+│   │   └── middleware.py       # ASGI + WSGI middleware (FastAPI / Flask)
 │   └── training/
 │       ├── train.py            # Model training + held-out split/eval
 │       ├── generate.py         # Synthetic bot/human data (top-up only)
 │       ├── groundtruth.py      # organization-x forensic rule matcher
 │       └── build_real_dataset.py  # Builds the real (+capped synthetic) training set
-├── tests/                      # 248 tests
+├── tests/
 │   ├── conftest.py             # Shared LogEntry/Session/log-file fixtures
 │   ├── test_cli.py             # 20 tests (scan_logfile + main() end-to-end)
 │   ├── test_parser.py          # 19 tests
@@ -419,7 +610,12 @@ microguard/
 │   ├── test_groundtruth.py     # 16 tests
 │   ├── test_training_quality.py # 38 tests (train-set fit + held-out generalization)
 │   ├── test_report.py          # 45 tests
-│   └── test_watch.py           # 12 tests (incl. watch_logfile() end-to-end)
+│   ├── test_watch.py           # 12 tests (incl. watch_logfile() end-to-end)
+│   └── live/
+│       ├── test_redis_store.py # 13 tests (real Redis, skip if unavailable)
+│       ├── test_scorer.py      # 10 tests (in-memory store)
+│       ├── test_server_integration.py # 7 tests (subprocess + real HTTP)
+│       └── test_middleware.py  # 6 tests (ASGI + WSGI, in-memory store)
 └── data/
     ├── model.json                    # Pre-trained model weights (1.8KB)
     ├── normalization.json            # Feature normalization params
@@ -433,7 +629,7 @@ microguard/
 ## Testing
 
 ```bash
-# Run all tests (248 tests)
+# Run all tests (264 tests)
 python -m pytest tests/
 
 # Run with verbose output
@@ -442,12 +638,15 @@ python -m pytest tests/ -v
 # Run specific test file
 python -m pytest tests/test_features.py
 
+# Run live tests (requires Redis)
+python -m pytest tests/live/
+
 # Coverage report (pip install pytest-cov first — dev-only, see requirements-dev.txt)
 pytest --cov=microguard --cov-report=term-missing
 ```
 
-**Test coverage:** 248 tests (247 passing, 1 skipped — network-dependent).
-Line coverage baseline: **71%**
+**Test coverage:** 264 tests (264 passing when Redis available; 20 skipped
+without Redis for live tests). Line coverage baseline: **71%**
 (no hard CI gate yet — `cli.py` and `watch.py`, previously untested at the
 integration level, are now at 85%/83%; `training/*.py` scripts are at 0%
 since they're one-shot data pipelines validated by manual runs, not unit

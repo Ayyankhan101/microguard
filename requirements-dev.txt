@@ -1,6 +1,12 @@
 -e .
 pytest
 pytest-cov
+# starlette's TestClient needs an HTTP client, and which one depends on the
+# starlette version: older releases use httpx, 1.5+ require httpx2 and raise a
+# RuntimeError at import without it. Both are listed so the dashboard and
+# middleware test suites collect on either.
+httpx
+httpx2
 ruff
 mypy
 vulture

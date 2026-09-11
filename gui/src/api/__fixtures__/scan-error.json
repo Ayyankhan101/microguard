@@ -1,0 +1,8 @@
+{
+  "total_sessions": 0,
+  "bot_count": 0,
+  "human_count": 0,
+  "bot_rate": 0.0,
+  "sessions": [],
+  "error": "Log file not found: does-not-exist.log"
+}

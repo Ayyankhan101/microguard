@@ -299,7 +299,7 @@ def save_dataset(
         'n_bot': sum(1 for l in labels if l == 1.0),
     }
     
-    with open(filepath, 'w') as f:
+    with open(filepath, 'w', encoding='utf-8') as f:
         json.dump(data, f, indent=2)
     
     print(f"💾 Dataset saved to: {filepath}")
@@ -313,6 +313,12 @@ if __name__ == '__main__':
     features, labels = generate_dataset(n_samples=2000, balance=0.5)
     
     # Save
-    data_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'data')
+    # Three dirnames, not two: this file is microguard/training/generate.py,
+    # so two levels up is microguard/ and the data directory would have been
+    # created inside the package. train.py:383 does the same walk correctly.
+    data_dir = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+        'data',
+    )
     os.makedirs(data_dir, exist_ok=True)
     save_dataset(features, labels, os.path.join(data_dir, 'training_data.json'))

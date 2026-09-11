@@ -13,17 +13,14 @@ from typing import Any
 
 from .features import FEATURE_NAMES, extract_features, group_into_sessions
 from .labeler import label_session
-from .model import BotDetector
+from .model import DEFAULT_MODEL_PATH, BotDetector
 from .parser import LogEntry, parse_file
 from .report import print_report
+from .scoring import BLOCK_THRESHOLD_DEFAULT, compute_combined_score
 
 # Default threshold for bot classification
 DEFAULT_THRESHOLD = 0.7
 
-# Path to pre-trained model (relative to package)
-DEFAULT_MODEL_PATH = os.path.join(
-    os.path.dirname(__file__), '..', 'data', 'model.json'
-)
 
 
 def _write_report(output_file: str, content: str) -> None:
@@ -56,6 +53,8 @@ def scan_logfile(
     Returns:
         Dictionary with scan results
     """
+    from collections import Counter
+    
     # Parse log file
     print(f"📂 Parsing {filepath}...", file=sys.stderr)
 
@@ -126,26 +125,9 @@ def scan_logfile(
             # Get model prediction (if available)
             if model is not None:
                 model_score = model.predict(features)
-                # Combine heuristic and model scores
-                # Weight: 60% model, 40% heuristic
-                combined_score = 0.6 * model_score + 0.4 * heuristic_conf
-                if heuristic_label == 'bot':
-                    combined_score = max(combined_score, heuristic_conf)
-                elif heuristic_label == 'human':
-                    # Symmetric to the floor above: a confident heuristic
-                    # 'human' call (e.g. the single-endpoint-API exemption
-                    # for GraphQL/SOAP/RPC/gRPC traffic) caps how high the
-                    # model alone can push the score. Without this, the
-                    # heuristic fix for single-endpoint APIs doesn't
-                    # actually change the final classification whenever
-                    # the model — trained mostly on REST-style bot
-                    # patterns where low endpoint diversity is a real bot
-                    # signal — independently scores the same session high.
-                    combined_score = min(combined_score, 1.0 - heuristic_conf)
             else:
-                # Use heuristic confidence as score
                 model_score = 0.0
-                combined_score = heuristic_conf if heuristic_label == 'bot' else (1.0 - heuristic_conf)
+            combined_score = compute_combined_score(heuristic_label, heuristic_conf, model_score)
 
             # Classify
             is_bot = combined_score >= threshold
@@ -157,7 +139,6 @@ def scan_logfile(
                 human_count += 1
 
         # Get top endpoint
-        from collections import Counter
         urls = [e.url.split('?')[0] for e in session.requests]
         top_endpoint = Counter(urls).most_common(1)[0][0] if urls else '?'
         
@@ -201,7 +182,7 @@ def scan_logfile(
 
 def main():
     """CLI entry point."""
-    if sys.platform == 'win32':
+    if sys.platform == 'win32':  # pragma: no cover - exercised only on Windows
         # Windows consoles default stdout/stderr to the OS locale codepage
         # (commonly cp1252), which can't encode the emoji used throughout
         # terminal/report output — every `microguard scan` would crash on
@@ -277,6 +258,84 @@ def main():
         help='Continuously monitor log file for new bot traffic (tails the file)'
     )
     
+    # serve command — live check server for nginx auth_request
+    serve_parser = subparsers.add_parser(
+        'serve',
+        help='Start live check server for nginx auth_request'
+    )
+    serve_parser.add_argument(
+        '--host',
+        default='127.0.0.1',
+        help='Bind address (default: 127.0.0.1)'
+    )
+    serve_parser.add_argument(
+        '--port',
+        type=int,
+        default=8400,
+        help='Listen port (default: 8400)'
+    )
+    serve_parser.add_argument(
+        '--redis-url',
+        default='redis://localhost:6379',
+        help='Redis connection URL (default: redis://localhost:6379)'
+    )
+    serve_parser.add_argument(
+        '--block-threshold',
+        type=float,
+        default=BLOCK_THRESHOLD_DEFAULT,
+        help='Score above which requests are blocked (default: 0.85)'
+    )
+    serve_parser.add_argument(
+        '--session-ttl',
+        type=int,
+        default=1800,
+        help='Session expiry in seconds (default: 1800)'
+    )
+    serve_parser.add_argument(
+        '--trust-forwarded-for',
+        action='store_true',
+        help='Honor X-Forwarded-For for client IP. Only enable behind a proxy '
+             'that overwrites it — the header is client-supplied, and a '
+             'spoofable session key defeats detection.'
+    )
+
+    # dashboard command — API + built SPA on one port
+    dashboard_parser = subparsers.add_parser(
+        'dashboard',
+        help='Start the web dashboard (live traffic, scans, model)'
+    )
+    dashboard_parser.add_argument(
+        '--host',
+        default='127.0.0.1',
+        help='Bind address (default: 127.0.0.1). The dashboard has no auth — '
+             'binding off loopback exposes every decision, and with '
+             '--allow-config-writes the blocking threshold itself.'
+    )
+    dashboard_parser.add_argument(
+        '--port',
+        type=int,
+        default=8500,
+        help='Listen port (default: 8500)'
+    )
+    dashboard_parser.add_argument(
+        '--redis-url',
+        default='redis://localhost:6379',
+        help='Redis the live path writes to (default: redis://localhost:6379). '
+             'Unreachable means the live tab is empty; scan and model still work.'
+    )
+    dashboard_parser.add_argument(
+        '--token',
+        default=None,
+        help='Require this shared secret in an X-Microguard-Token header on every '
+             '/api request. For when loopback binding is not an option.'
+    )
+    dashboard_parser.add_argument(
+        '--allow-config-writes',
+        action='store_true',
+        help='Let the dashboard change the live block threshold. Off by default '
+             'because it decides who gets blocked on a running site.'
+    )
+
     # probe command
     probe_parser = subparsers.add_parser(
         'probe',
@@ -466,19 +525,9 @@ def main():
 
         from .scanner import format_probe_report, probe_and_analyze
 
-        # Load model
-        model = None
-        model_available = os.path.exists(args.model)
-        if model_available:
-            try:
-                model = BotDetector(args.model)
-            except Exception as e:  # noqa: BLE001 — model load is best-effort, falls back to heuristics
-                print(f"⚠️  Could not load model: {e}", file=sys.stderr)
-
         # Run probe analysis
         results = probe_and_analyze(
             url=args.url,
-            model=model,
             count=args.count,
             delay=args.delay,
             threshold=args.threshold,
@@ -511,6 +560,27 @@ def main():
         else:
             sys.exit(0)
     
+    elif args.command == 'serve':
+        from .live.server import run_server
+        run_server(
+            host=args.host,
+            port=args.port,
+            redis_url=args.redis_url,
+            block_threshold=args.block_threshold,
+            session_ttl=args.session_ttl,
+            trust_forwarded_for=args.trust_forwarded_for,
+        )
+
+    elif args.command == 'dashboard':
+        from .dashboard.server import run_dashboard
+        run_dashboard(
+            host=args.host,
+            port=args.port,
+            redis_url=args.redis_url,
+            allow_config_writes=args.allow_config_writes,
+            token=args.token,
+        )
+
     elif args.command == 'info':
         print("🔍 Microguard v2.0.0")
         print("   Bot Traffic Audit Tool powered by micrograd")

@@ -28,14 +28,14 @@ class TestReadNewLines:
 
     def test_read_from_empty_file(self, tmp_path):
         log_file = tmp_path / "test.log"
-        log_file.write_text("")
+        log_file.write_text("", encoding='utf-8')
         entries, offset = _read_new_lines(str(log_file), 0, 'nginx')
         assert entries == []
         assert offset == 0
 
     def test_read_new_entries(self, tmp_path):
         log_file = tmp_path / "test.log"
-        log_file.write_text(NGINX_HUMAN + "\n" + NGINX_BOT + "\n")
+        log_file.write_text(NGINX_HUMAN + "\n" + NGINX_BOT + "\n", encoding='utf-8')
         entries, _offset = _read_new_lines(str(log_file), 0, 'nginx')
         assert len(entries) == 2
         assert entries[0].ip == '192.168.1.100'
@@ -43,12 +43,12 @@ class TestReadNewLines:
 
     def test_read_appended_entries(self, tmp_path):
         log_file = tmp_path / "test.log"
-        log_file.write_text(NGINX_HUMAN + "\n")
+        log_file.write_text(NGINX_HUMAN + "\n", encoding='utf-8')
         entries1, offset1 = _read_new_lines(str(log_file), 0, 'nginx')
         assert len(entries1) == 1
 
         # Append new entry
-        with open(str(log_file), 'a') as f:
+        with open(str(log_file), 'a', encoding='utf-8') as f:
             f.write(NGINX_BOT + "\n")
 
         entries2, offset2 = _read_new_lines(str(log_file), offset1, 'nginx')
@@ -58,7 +58,7 @@ class TestReadNewLines:
 
     def test_no_new_entries(self, tmp_path):
         log_file = tmp_path / "test.log"
-        log_file.write_text(NGINX_HUMAN + "\n")
+        log_file.write_text(NGINX_HUMAN + "\n", encoding='utf-8')
         _entries1, offset1 = _read_new_lines(str(log_file), 0, 'nginx')
         entries2, offset2 = _read_new_lines(str(log_file), offset1, 'nginx')
         assert entries2 == []
@@ -76,7 +76,7 @@ class TestReadNewLines:
             '"method": "GET", "url": "/api", "status": 200, "body_bytes_sent": 100, '
             '"http_referer": "-", "http_user_agent": "python-requests/2.28.0"}'
         )
-        log_file.write_text(json_line + "\n")
+        log_file.write_text(json_line + "\n", encoding='utf-8')
         entries, _offset = _read_new_lines(str(log_file), 0, 'json')
         assert len(entries) == 1
         assert entries[0].ip == '10.0.0.1'
@@ -156,7 +156,7 @@ class TestWatchLogfile:
     def _run_with_append(self, log_file, lines, **kwargs):
         def append_later():
             time.sleep(0.05)
-            with open(log_file, 'a') as f:
+            with open(log_file, 'a', encoding='utf-8') as f:
                 f.write("\n".join(lines) + "\n")
 
         t = threading.Thread(target=append_later)
@@ -169,7 +169,7 @@ class TestWatchLogfile:
 
     def test_detects_and_prints_obvious_bot(self, tmp_path, capsys):
         log_file = tmp_path / "watch.log"
-        log_file.write_text("")
+        log_file.write_text("", encoding='utf-8')
         self._run_with_append(log_file, [NGINX_BOT])
         output = capsys.readouterr().out
         assert "10.0.0.1" in output
@@ -182,14 +182,14 @@ class TestWatchLogfile:
         printed as a bot detection — human sessions produce no per-entry
         print at all, so the IP should not appear in output."""
         log_file = tmp_path / "watch.log"
-        log_file.write_text("")
+        log_file.write_text("", encoding='utf-8')
         self._run_with_append(log_file, _graphql_lines(ip="10.1.1.1"))
         output = capsys.readouterr().out
         assert "10.1.1.1" not in output
 
     def test_stops_after_max_iterations_without_keyboard_interrupt(self, tmp_path):
         log_file = tmp_path / "watch.log"
-        log_file.write_text("")
+        log_file.write_text("", encoding='utf-8')
         # Must return on its own — no KeyboardInterrupt raised, no hang.
         watch_logfile(str(log_file), interval=0.01, _max_iterations=3)
 
@@ -201,3 +201,139 @@ class TestWatchLogfile:
 
 # Use the same constant that was defined above
 NGINX_HUMAN = NGINX_LINE
+
+
+class TestWatchEdges:
+    """The remaining branches: no model, a bad model, blank lines, the
+    periodic status lines, and the interrupt summary."""
+
+    def test_blank_lines_between_entries_are_skipped(self, tmp_path):
+        from microguard.watch import _read_new_lines
+
+        path = tmp_path / "access.log"
+        path.write_text(NGINX_HUMAN + "\n\n\n" + NGINX_BOT + "\n", encoding='utf-8')
+
+        entries, offset = _read_new_lines(str(path), 0, 'nginx')
+
+        assert len(entries) == 2
+        assert offset > 0
+
+    def test_running_without_a_model_says_heuristic_only(self, tmp_path, capsys):
+        log_file = tmp_path / "access.log"
+        log_file.write_text("", encoding='utf-8')
+
+        watch_logfile(str(log_file), interval=0.01, _max_iterations=1)
+
+        assert 'heuristic only' in capsys.readouterr().out
+
+    def test_a_bad_model_warns_and_carries_on(self, tmp_path, capsys):
+        log_file = tmp_path / "access.log"
+        log_file.write_text("", encoding='utf-8')
+        bad_model = tmp_path / "model.json"
+        bad_model.write_text("this is not json", encoding='utf-8')
+
+        watch_logfile(str(log_file), model_path=str(bad_model),
+                      interval=0.01, _max_iterations=1)
+
+        assert 'Could not load model' in capsys.readouterr().err
+
+    def test_a_missing_file_is_tolerated(self, tmp_path, capsys):
+        watch_logfile(str(tmp_path / "never-created.log"),
+                      interval=0.01, _max_iterations=2)
+
+        assert 'Log file not found' in capsys.readouterr().err
+
+    def test_the_idle_status_line_appears_on_the_reporting_interval(
+        self, tmp_path, capsys, monkeypatch
+    ):
+        """The status line is gated on 30 seconds of wall clock.
+
+        Rather than wait, advance the module's clock. `sleep` is also stubbed
+        so the loop does not actually pause.
+        """
+        import microguard.watch as watch_module
+
+        clock = iter([0.0] + [i * 60.0 for i in range(1, 20)])
+        monkeypatch.setattr(watch_module.time, 'time', lambda: next(clock))
+        monkeypatch.setattr(watch_module.time, 'sleep', lambda _s: None)
+
+        log_file = tmp_path / "access.log"
+        log_file.write_text("", encoding='utf-8')
+
+        watch_logfile(str(log_file), interval=0, _max_iterations=2)
+
+        assert 'Watching...' in capsys.readouterr().out
+
+    def test_the_stats_line_appears_after_entries_are_processed(
+        self, tmp_path, capsys, monkeypatch
+    ):
+        import microguard.watch as watch_module
+
+        log_file = tmp_path / "access.log"
+        log_file.write_text("", encoding='utf-8')
+
+        clock = iter([0.0] + [i * 60.0 for i in range(1, 30)])
+        monkeypatch.setattr(watch_module.time, 'time', lambda: next(clock))
+
+        real_sleep = time.sleep
+        appended = {'done': False}
+
+        def fake_sleep(_seconds):
+            # Write on the first tick so the loop has entries to process.
+            if not appended['done']:
+                with open(log_file, 'a', encoding='utf-8') as handle:
+                    handle.write(NGINX_BOT + "\n")
+                appended['done'] = True
+            real_sleep(0.001)
+
+        monkeypatch.setattr(watch_module.time, 'sleep', fake_sleep)
+
+        watch_logfile(str(log_file), interval=0, _max_iterations=2)
+
+        assert 'Stats:' in capsys.readouterr().out
+
+    def test_the_loop_can_stop_on_an_iteration_that_processed_entries(
+        self, tmp_path, capsys, monkeypatch
+    ):
+        """The loop has three exit points; this is the one after scoring.
+
+        The other two (missing file, no new entries) are reached by the
+        existing tests, which outlast their single append.
+        """
+        import microguard.watch as watch_module
+
+        log_file = tmp_path / "access.log"
+        log_file.write_text("", encoding='utf-8')
+
+        real_sleep = time.sleep
+
+        def fake_sleep(_seconds):
+            with open(log_file, 'a', encoding='utf-8') as handle:
+                handle.write(NGINX_BOT + "\n")
+            real_sleep(0.001)
+
+        monkeypatch.setattr(watch_module.time, 'sleep', fake_sleep)
+
+        watch_logfile(str(log_file), model_path=DEFAULT_MODEL_PATH,
+                      interval=0, _max_iterations=1)
+
+        assert 'Bot Detection' in capsys.readouterr().out
+
+    def test_ctrl_c_prints_a_final_summary(self, tmp_path, capsys, monkeypatch):
+        """time.sleep is the loop's first statement, so raising there lands
+        directly in the interrupt handler."""
+        import microguard.watch as watch_module
+
+        def interrupt(_seconds):
+            raise KeyboardInterrupt
+
+        monkeypatch.setattr(watch_module.time, 'sleep', interrupt)
+
+        log_file = tmp_path / "access.log"
+        log_file.write_text("", encoding='utf-8')
+
+        watch_logfile(str(log_file), interval=0.01)
+
+        output = capsys.readouterr().out
+        assert 'Watch stopped.' in output
+        assert 'Total: 0 entries scanned' in output

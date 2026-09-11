@@ -499,3 +499,151 @@ class TestPrintReport:
         print_report(result, fmt='cloudflare')
         captured = capsys.readouterr()
         assert '(ip.src in {10.0.0.50})' in captured.out
+
+
+def _results(**overrides):
+    """A scan result dict, the shape scan_logfile returns."""
+    result = {
+        'total_sessions': 10,
+        'bot_count': 1,
+        'human_count': 9,
+        'integration_count': 0,
+        'bot_rate': 0.1,
+        'threshold': 0.7,
+        'model_used': True,
+        'sessions': [],
+        'summary': {
+            'total_entries': 50, 'total_sessions': 10, 'bot_sessions': 1,
+            'human_sessions': 9, 'integration_sessions': 0, 'bot_rate': 0.1,
+        },
+    }
+    result.update(overrides)
+    return result
+
+
+def _session(**overrides):
+    session = {
+        'ip': '10.0.0.1',
+        'score': 0.5,
+        'model_score': 0.4,
+        'heuristic_label': 'human',
+        'heuristic_confidence': 0.6,
+        'heuristic_reason': 'no strong signals either way',
+        'label': 'human',
+        'request_count': 5,
+        'duration': 12.0,
+        'top_endpoint': '/api/items',
+        'user_agent': 'Mozilla/5.0',
+        'features': {},
+    }
+    session.update(overrides)
+    return session
+
+
+class TestModerateTrafficBand:
+    """Between 10% and 30% bot traffic the report warns rather than alarms."""
+
+    def test_terminal_warns(self):
+        output = format_terminal(_results(bot_rate=0.2, bot_count=2, human_count=8))
+
+        assert 'Moderate bot traffic' in output
+
+    def test_html_says_warning(self):
+        html = format_html(_results(bot_rate=0.2, bot_count=2, human_count=8))
+
+        assert 'Warning' in html
+
+
+class TestIntegrationDisplay:
+    """Recognized webhooks are counted separately from bots and humans."""
+
+    def test_terminal_lists_integrations(self):
+        output = format_terminal(_results(integration_count=3))
+
+        assert 'Integrations' in output
+
+    def test_html_labels_an_integration_session(self):
+        html = format_html(_results(sessions=[
+            _session(label='automated-integration',
+                     heuristic_label='automated-integration'),
+        ]))
+
+        assert 'label-integration' in html
+
+
+class TestTruncation:
+    def test_a_long_endpoint_is_shortened_in_the_html_cell(self):
+        # The full value stays in the title attribute; only the visible cell
+        # text is cut.
+        html = format_html(_results(sessions=[_session(top_endpoint='/' + 'a' * 80)]))
+
+        assert '/' + 'a' * 26 + '...' in html
+
+    def test_a_long_reason_is_shortened_in_the_html_cell(self):
+        html = format_html(_results(sessions=[_session(heuristic_reason='r' * 90)]))
+
+        assert 'r' * 47 + '...' in html
+
+    def test_a_long_duration_is_flagged_in_the_terminal_table(self):
+        output = format_terminal(_results(sessions=[_session(duration=9999.0)]))
+
+        assert '9999' in output
+
+
+class TestScoreBands:
+    def test_a_middle_score_renders_in_the_warning_colour(self):
+        output = format_terminal(_results(sessions=[_session(score=0.65)]))
+
+        assert '0.65' in output
+
+    def test_html_uses_the_medium_score_class(self):
+        html = format_html(_results(sessions=[_session(score=0.65)]))
+
+        assert 'score-medium' in html
+
+    def test_the_low_band_has_its_own_colour_name(self):
+        assert score_label_color(0.45) == 'blue'
+
+
+class TestPrintReportHtml:
+    def test_html_goes_to_stdout(self, capsys):
+        print_report(_results(), fmt='html')
+
+        assert '<!DOCTYPE html>' in capsys.readouterr().out
+
+
+class TestRemainingDisplayBranches:
+    def test_an_integration_label_gets_its_own_colour(self):
+        from microguard.report import _label_color_name
+
+        assert _label_color_name('automated-integration') == 'blue'
+        assert _label_color_name('bot') == 'red'
+        assert _label_color_name('human') == 'green'
+
+    def test_a_fast_busy_session_has_its_duration_flagged(self):
+        output = format_terminal(_results(sessions=[
+            _session(duration=0.4, request_count=20),
+        ]))
+
+        assert '0.4s' in output
+
+    def test_html_uses_the_low_score_class(self):
+        # The class boundary is 0.3, not the SAFE/LOW band boundary of 0.30.
+        html = format_html(_results(sessions=[_session(score=0.2)]))
+
+        assert 'score-low' in html
+
+    def test_a_long_user_agent_is_shortened_in_the_html_cell(self):
+        html = format_html(_results(sessions=[_session(user_agent='u' * 60)]))
+
+        assert 'u' * 37 + '...' in html
+
+    def test_verbose_marks_a_healthy_bot_rate(self):
+        output = format_verbose(_results(bot_rate=0.05))
+
+        assert '✅' in output
+
+    def test_verbose_marks_a_moderate_bot_rate(self):
+        output = format_verbose(_results(bot_rate=0.2))
+
+        assert '⚠️' in output

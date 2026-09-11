@@ -1,4 +1,12 @@
-"""Tests for the heuristic labeler."""
+"""Tests for the heuristic labeler at the session level.
+
+Per-rule coverage lives in test_labeler_rules.py. This file exercises the
+`_make_session` shapes and `label_entries`.
+
+Assertions here name the rule via its reason string. They used to read
+`assert label == 'bot' or confidence > 0.5`, which every rule in the module
+satisfies — so they could not fail, and did not test what they were named for.
+"""
 
 from datetime import datetime, timedelta, timezone
 
@@ -54,9 +62,10 @@ class TestLabelSession:
             user_agent="python-requests/2.28.0",
             num_requests=5
         )
-        label, confidence, _reason = label_session(session)
+        label, confidence, reason = label_session(session)
         assert label == 'bot'
-        assert confidence >= 0.9
+        assert confidence == 0.95
+        assert 'known bot/monitoring UA' in reason
     
     def test_known_browser_ua(self):
         """Known browser user agent with normal behavior should be human."""
@@ -65,9 +74,12 @@ class TestLabelSession:
             num_requests=10,
             timing="variable"
         )
-        label, confidence, _reason = label_session(session)
-        # Should lean human
-        assert label == 'human' or confidence < 0.6
+        label, confidence, reason = label_session(session)
+        # 18 seconds is under rule 18's 30-second bar, so the browsing-shape
+        # rule is what actually answers here.
+        assert label == 'human'
+        assert confidence == 0.65
+        assert 'exploring 10 different endpoints' in reason
     
     def test_uniform_timing_bot(self):
         """Very uniform timing should be flagged as bot."""
@@ -76,9 +88,10 @@ class TestLabelSession:
             num_requests=10,
             timing="uniform"
         )
-        label, confidence, _reason = label_session(session)
-        # Uniform timing is a strong bot signal
-        assert label == 'bot' or confidence > 0.5
+        label, confidence, reason = label_session(session)
+        assert label == 'bot'
+        assert confidence == 0.90
+        assert 'uniform timing' in reason
     
     def test_same_url_bot(self):
         """All requests to same URL should be flagged."""
@@ -87,14 +100,18 @@ class TestLabelSession:
             num_requests=15,
             same_url=True
         )
-        label, _confidence, _reason = label_session(session)
+        label, confidence, reason = label_session(session)
         assert label == 'bot'
+        assert confidence == 0.80
+        assert 'requests to same endpoint' in reason
 
     def test_empty_session(self):
         """Empty session should default to human."""
         session = Session("192.168.1.1", "Mozilla/5.0")
-        label, _confidence, _reason = label_session(session)
+        label, confidence, reason = label_session(session)
         assert label == 'human'
+        assert confidence == 0.5
+        assert reason == 'empty session'
     
     def test_unknown_ua_with_many_requests(self):
         """Unknown UA with many requests should lean bot."""
@@ -103,9 +120,10 @@ class TestLabelSession:
             num_requests=20,
             timing="variable"
         )
-        _label, confidence, _reason = label_session(session)
-        # Unknown UA is a signal
-        assert confidence >= 0.5
+        label, confidence, reason = label_session(session)
+        assert label == 'bot'
+        assert confidence == 0.60
+        assert 'unknown user-agent' in reason
 
 
 class TestLabelEntries:

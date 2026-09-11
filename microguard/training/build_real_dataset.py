@@ -111,7 +111,7 @@ def build_dataset(seed: int = 42) -> dict:
     harvard_path = os.path.join(DATA_DIR, 'harvard_training_data.json')
     human_count = 0
     if os.path.exists(harvard_path):
-        with open(harvard_path) as f:
+        with open(harvard_path, encoding='utf-8') as f:
             harvard = json.load(f)
         for i, (feat, label) in enumerate(zip(harvard['features'], harvard['labels'])):
             if label <= 0.5:
@@ -164,7 +164,7 @@ def build_dataset(seed: int = 42) -> dict:
 def main():
     dataset = build_dataset()
     out_path = os.path.join(DATA_DIR, 'real_bot_training_data.json')
-    with open(out_path, 'w') as f:
+    with open(out_path, 'w', encoding='utf-8') as f:
         json.dump(dataset, f, indent=2)
 
     print(f"💾 Dataset saved to: {out_path}")

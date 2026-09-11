@@ -26,7 +26,7 @@ def _load_harvard():
     path = os.path.join(DATA_DIR, 'harvard_training_data.json')
     if not os.path.exists(path):
         pytest.skip("Harvard training data not found")
-    with open(path) as f:
+    with open(path, encoding='utf-8') as f:
         return json.load(f)
 
 
@@ -38,7 +38,7 @@ def _load_training_data():
     for name in ('real_bot_training_data.json', 'harvard_training_data.json'):
         path = os.path.join(DATA_DIR, name)
         if os.path.exists(path):
-            with open(path) as f:
+            with open(path, encoding='utf-8') as f:
                 return json.load(f)
     pytest.skip("no primary training data file found")
 
@@ -47,7 +47,7 @@ def _load_holdout():
     path = os.path.join(DATA_DIR, 'eval_holdout.json')
     if not os.path.exists(path):
         pytest.skip("eval_holdout.json not found — retrain with a held-out split first")
-    with open(path) as f:
+    with open(path, encoding='utf-8') as f:
         return json.load(f)
 
 
@@ -55,7 +55,7 @@ def _load_normalization():
     path = os.path.join(DATA_DIR, 'normalization.json')
     if not os.path.exists(path):
         pytest.skip("normalization.json not found")
-    with open(path) as f:
+    with open(path, encoding='utf-8') as f:
         return json.load(f)
 
 
@@ -428,7 +428,7 @@ class TestAdversarialRobustness:
         path = os.path.join(DATA_DIR, 'adversarial_eval.json')
         if not os.path.exists(path):
             pytest.skip("adversarial_eval.json not found — retrain first")
-        with open(path) as f:
+        with open(path, encoding='utf-8') as f:
             data = json.load(f)
 
         model = _load_model()
@@ -457,7 +457,7 @@ class TestCrossDataset:
         if not os.path.exists(path):
             pytest.skip("real_training_data.json not found")
 
-        with open(path) as f:
+        with open(path, encoding='utf-8') as f:
             data = json.load(f)
 
         assert 'features' in data
@@ -500,3 +500,124 @@ class TestCrossDataset:
         feat[10] = 0.0  # has_accept_language = no
         score = model.predict(feat)
         assert 0.0 <= score <= 1.0
+
+
+# ---------------------------------------------------------------------------
+# Live feature shape
+# ---------------------------------------------------------------------------
+
+
+# Indices of the two features derived from the HTTP status code. A proxy decides
+# whether to block before the app has responded, so the live path has no status
+# to report and sends 0 for both. See microguard.features.FEATURE_NAMES.
+STATUS_FEATURE_INDICES = (13, 15)  # status_code_entropy, error_rate
+
+
+def _mask_status_features(rows):
+    """Return rows as the live path actually sends them: status-derived
+    features zeroed, everything else untouched."""
+    masked = []
+    for row in rows:
+        copy = list(row)
+        for i in STATUS_FEATURE_INDICES:
+            copy[i] = 0.0
+        masked.append(copy)
+    return masked
+
+
+class TestLiveFeatureShape:
+    """The model must decide the same way with or without status features.
+
+    The live entrypoints score a request before the app responds, so they pass
+    status=0 and two of the nineteen features are always zero. That was raised
+    as a train/serve skew needing a retrain with feature dropout. Measured
+    against the shipped model it is not: decisions are identical and the mean
+    score shift is ~0.0001, because the model gives those two inputs almost no
+    weight. These tests pin that. If a future retrain makes the model
+    status-dependent, the live path degrades silently — and this fails first.
+    """
+
+    def test_masking_status_features_changes_no_decision(self):
+        model = _load_model()
+        data = _load_holdout()
+        rows = data['features']
+        crossed = sum(
+            1
+            for real, live in zip(rows, _mask_status_features(rows))
+            if (model.predict(real) > 0.5) != (model.predict(live) > 0.5)
+        )
+        assert crossed == 0, f"{crossed} sessions flip when status features are zeroed"
+
+    def test_live_shape_holds_accuracy(self):
+        model = _load_model()
+        data = _load_holdout()
+        labels = data['labels']
+        live = _mask_status_features(data['features'])
+        correct = sum(
+            1 for feat, label in zip(live, labels)
+            if (model.predict(feat) > 0.5) == (label > 0.5)
+        )
+        accuracy = correct / len(labels)
+        assert accuracy >= 0.85, f"Live-shape accuracy {accuracy:.1%} below 85% threshold"
+
+    def test_live_shape_holds_bot_recall(self):
+        model = _load_model()
+        data = _load_holdout()
+        live = _mask_status_features(data['features'])
+        bots = [(f, l) for f, l in zip(live, data['labels']) if l > 0.5]
+        if not bots:
+            pytest.skip("no bot samples in held-out set")
+        recall = sum(1 for f, _ in bots if model.predict(f) > 0.5) / len(bots)
+        assert recall >= 0.80, f"Live-shape bot recall {recall:.1%} below 80% threshold"
+
+    def test_score_shift_stays_small(self):
+        """A wide decision margin is what makes the zeroing harmless. If the
+        shift grows, the margin is being eaten even before decisions flip."""
+        model = _load_model()
+        rows = _load_holdout()['features']
+        shifts = [
+            abs(model.predict(real) - model.predict(live))
+            for real, live in zip(rows, _mask_status_features(rows))
+        ]
+        assert max(shifts) < 0.10, f"max score shift {max(shifts):.4f} is no longer negligible"
+
+
+class TestModelLoadingIsComplete:
+    """Loading a model must never leave it half-loaded.
+
+    Weights and normalization params were loaded by different code paths: the
+    constructor loaded both, a bare load() loaded only weights. The live scorer
+    used load(), so it fed raw features into a model trained on [0, 1]
+    normalized ones. Held-out bot recall was 2.4% instead of 100%, and nothing
+    raised — predict() just skips normalization when the params are absent.
+    """
+
+    def test_load_restores_normalization(self):
+        from microguard.model import BotDetector
+
+        path = os.path.join(DATA_DIR, 'model.json')
+        if not os.path.exists(path):
+            pytest.skip("model.json not found")
+        model = BotDetector()
+        model.load(path)
+        assert model.norm_mins is not None
+        assert model.norm_maxs is not None
+
+    def test_both_load_paths_agree(self):
+        from microguard.model import BotDetector
+
+        path = os.path.join(DATA_DIR, 'model.json')
+        if not os.path.exists(path):
+            pytest.skip("model.json not found")
+        via_ctor = BotDetector(path)
+        via_load = BotDetector()
+        via_load.load(path)
+        features = [0.5] * 19
+        assert via_ctor.predict(features) == via_load.predict(features)
+
+    def test_the_live_scorer_gets_a_normalizing_model(self):
+        from microguard.live.scorer import _load_model as load_live_model
+
+        model = load_live_model()
+        assert model is not None
+        assert model.norm_mins is not None, "live path would feed raw features"

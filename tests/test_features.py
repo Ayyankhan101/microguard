@@ -2,6 +2,8 @@
 
 from datetime import datetime, timedelta, timezone
 
+import pytest
+
 from microguard.features import (
     FEATURE_NAMES,
     Session,
@@ -187,3 +189,80 @@ class TestSessionGrouping:
     def test_empty_entries(self):
         sessions = group_into_sessions([])
         assert len(sessions) == 0
+
+
+class TestNeverComputedFeatures:
+    """Two of the 19 features had never been computed as anything but zero.
+
+    Both work; nothing had ever built a session that exercised them, so a
+    regression in either would have gone unnoticed.
+    """
+
+    def test_method_mismatch_counts_posts_to_static_assets(self, make_entry, make_session):
+        """A POST to a stylesheet is not something browsers do."""
+        entries = [
+            make_entry(url="/theme.css", method="POST"),
+            make_entry(url="/app.js", method="POST"),
+            make_entry(url="/api/items", method="POST"),   # legitimate, not counted
+            make_entry(url="/logo.png", method="GET"),     # not a POST, not counted
+        ]
+        session = make_session("1.1.1.1", "Mozilla/5.0", entries)
+
+        features = extract_features(session)
+
+        assert features[FEATURE_NAMES.index('method_mismatch_count')] == 2.0
+
+    def test_max_sustained_click_rate_over_html_page_views(self, make_entry, make_session):
+        """Counts page views inside the densest 12-second window.
+
+        Only URLs ending in .html or / count, which is what makes it a
+        navigation-speed signal rather than a subresource counter.
+        """
+        base = datetime(2023, 3, 24, 17, 0, 0, tzinfo=timezone.utc)
+        entries = [
+            make_entry(url="/page.html", timestamp=base + timedelta(seconds=i * 2))
+            for i in range(4)
+        ]
+        session = make_session("1.1.1.1", "Mozilla/5.0", entries)
+
+        features = extract_features(session)
+
+        # Four page views inside one 12s window -> 4/12 per second.
+        assert features[FEATURE_NAMES.index('max_sustained_click_rate')] == pytest.approx(4 / 12)
+
+    def test_click_rate_ignores_subresources(self, make_entry, make_session):
+        base = datetime(2023, 3, 24, 17, 0, 0, tzinfo=timezone.utc)
+        entries = [
+            make_entry(url=f"/asset/{i}.png", timestamp=base + timedelta(seconds=i))
+            for i in range(10)
+        ]
+        session = make_session("1.1.1.1", "Mozilla/5.0", entries)
+
+        features = extract_features(session)
+
+        assert features[FEATURE_NAMES.index('max_sustained_click_rate')] == 0.0
+
+    def test_a_session_with_no_requests_is_all_zeros(self):
+        features = extract_features(Session("1.1.1.1", "Mozilla/5.0"))
+
+        assert features == [0.0] * 19
+
+
+class TestSessionEdges:
+    def test_duration_is_zero_before_any_request(self):
+        assert Session("1.1.1.1", "Mozilla/5.0").duration == 0.0
+
+    def test_empty_user_agent_is_categorized_unknown(self, make_entry, make_session):
+        session = make_session("1.1.1.1", "", [make_entry(user_agent="")])
+
+        features = extract_features(session)
+
+        # 0=browser, 1=bot, 2=unknown. Categorical, not ordinal.
+        assert features[FEATURE_NAMES.index('ua_category')] == 2.0
+
+    def test_dash_user_agent_is_categorized_unknown(self, make_entry, make_session):
+        session = make_session("1.1.1.1", "-", [make_entry(user_agent="-")])
+
+        features = extract_features(session)
+
+        assert features[FEATURE_NAMES.index('ua_category')] == 2.0

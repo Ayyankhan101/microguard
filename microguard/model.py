@@ -5,7 +5,10 @@ Input: 19 features
 Output: 0.0 (human) to 1.0 (bot)
 """
 
+from __future__ import annotations
+
 import json
+import logging
 import math
 import os
 
@@ -13,11 +16,22 @@ import os
 try:
     from micrograd.engine import Value
     from micrograd.nn import MLP
-except ImportError:
+except ImportError:  # pragma: no cover - install-time guard, needs micrograd absent
     raise ImportError(
         "micrograd is required. Install with: pip install micrograd\n"
         "Or from source: pip install git+https://github.com/karpathy/micrograd.git"
     )
+
+
+# The trained model artifact. Defined here, next to BotDetector, because both
+# the batch CLI and the live scorer need it — a second copy in either one is how
+# the live path ended up looking for a file that never existed.
+DEFAULT_MODEL_PATH = os.path.join(
+    os.path.dirname(__file__), '..', 'data', 'model.json'
+)
+
+
+logger = logging.getLogger(__name__)
 
 
 class BotDetector:
@@ -43,19 +57,12 @@ class BotDetector:
         # MLP: 19 inputs → 4 hidden → 1 output (lightweight for speed)
         self.model = MLP(self.NUM_FEATURES, [4, 1])
         
-        # Normalization parameters
-        self.norm_mins = None
-        self.norm_maxs = None
+        # Normalization parameters, populated by load() alongside the weights.
+        self.norm_mins: list[float] | None = None
+        self.norm_maxs: list[float] | None = None
         
         if model_path and os.path.exists(model_path):
             self.load(model_path)
-            # Load normalization params from same directory
-            norm_path = os.path.join(os.path.dirname(model_path), 'normalization.json')
-            if os.path.exists(norm_path):
-                with open(norm_path) as f:
-                    norm_data = json.load(f)
-                self.norm_mins = norm_data['mins']
-                self.norm_maxs = norm_data['maxs']
     
     def predict(self, features: list[float]) -> float:
         """Predict bot probability for a single feature vector.
@@ -89,8 +96,10 @@ class BotDetector:
         # Forward pass
         output = self.model(x)
         
-        # Handle both list and single Value returns
-        if isinstance(output, list):
+        # Handle both list and single Value returns. The final layer has one
+        # neuron, so micrograd returns a bare Value and this never fires with
+        # the shipped architecture; kept in case the shape changes.
+        if isinstance(output, list):  # pragma: no cover
             output = output[0]
         
         # Model outputs raw logit: positive = bot, negative = human
@@ -139,8 +148,8 @@ class BotDetector:
             # Forward pass
             output = self.model(x)
             
-            # Handle both list and single Value returns
-            if isinstance(output, list):
+            # Same unreachable unwrap as in predict() - see the note there.
+            if isinstance(output, list):  # pragma: no cover
                 output = output[0]
             
             # MSE loss: target is 1.0 for bot, -1.0 for human
@@ -242,7 +251,13 @@ class BotDetector:
         return losses
     
     def save(self, filepath: str):
-        """Save model weights to JSON file."""
+        """Save model weights to JSON file.
+
+        encoding='utf-8' explicit here and on every other open() in the
+        package: without it Python falls back to the OS locale encoding
+        (cp1252 on Windows), so the same file round-trips differently per
+        platform. See parser.py::_open_text for where this first bit.
+        """
         weights = []
         for param in self.model.parameters():
             weights.append(param.data)
@@ -253,12 +268,20 @@ class BotDetector:
             'weights': weights,
         }
         
-        with open(filepath, 'w') as f:
+        with open(filepath, 'w', encoding='utf-8') as f:
             json.dump(data, f, indent=2)
     
     def load(self, filepath: str):
-        """Load model weights from JSON file."""
-        with open(filepath, 'r') as f:
+        """Load model weights AND the normalization params beside them.
+
+        Both, always. These were split once — the constructor loaded
+        normalization, bare load() loaded only weights — and the live scorer
+        happened to use load(), so it fed raw features into a model trained on
+        [0, 1] normalized ones. Held-out bot recall was 2.4% instead of 100%,
+        and nothing failed: predict() simply skips normalization when the
+        params are absent. A half-loaded model must not be a reachable state.
+        """
+        with open(filepath, 'r', encoding='utf-8') as f:
             data = json.load(f)
         
         weights = data['weights']
@@ -272,6 +295,19 @@ class BotDetector:
         
         for param, weight in zip(params, weights):
             param.data = weight
+
+        norm_path = os.path.join(os.path.dirname(filepath), 'normalization.json')
+        if os.path.exists(norm_path):
+            with open(norm_path, encoding='utf-8') as f:
+                norm_data = json.load(f)
+            self.norm_mins = norm_data['mins']
+            self.norm_maxs = norm_data['maxs']
+        else:
+            logger.warning(
+                "no normalization.json beside %s - predict() will receive raw "
+                "features, which the model was not trained on",
+                filepath,
+            )
     
     @staticmethod
     def sigmoid(x: float) -> float:

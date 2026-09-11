@@ -116,21 +116,30 @@ class TestProbeUrl:
         result = probe_url("https://httpbin.org/get", timeout=5.0)
         assert result.status_code == 200
         assert result.timing.get('total', 0) > 0
-    
-    def test_probe_invalid_url(self):
-        """Test probing an invalid URL."""
+
+    def test_probe_unresolvable_host_reports_an_error(self):
+        """A `.invalid` TLD cannot resolve, per RFC 2606, so this needs no
+        network — the resolver fails locally.
+
+        Asserts `error is not None`, not `error or status >= 400`: the looser
+        form passed on any outcome at all, including a silent success.
+        """
         result = probe_url("https://this-domain-does-not-exist-12345.invalid", timeout=2.0)
-        assert result.error is not None or result.status_code >= 400
-    
-    def test_probe_bad_ssl(self):
-        """Test probing with SSL verification disabled."""
-        result = probe_url(
-            "https://self-signed.badssl.com/",
-            verify_ssl=False,
-            timeout=5.0,
-        )
-        # Should not raise, might get a response or error
-        assert result.timing.get('total', 0) >= 0
+
+        assert result.error is not None
+        assert result.status_code == 0
+
+    def test_probe_refused_connection_reports_an_error(self):
+        """Port 1 on loopback refuses immediately. No egress, no third party.
+
+        This replaces a test that hit self-signed.badssl.com and asserted
+        `timing >= 0`, which held whether the request succeeded, was refused,
+        or never left the machine — on all 12 CI matrix jobs.
+        """
+        result = probe_url("http://127.0.0.1:1/", timeout=2.0)
+
+        assert result.error is not None
+        assert result.status_code == 0
 
 
 class TestFormatProbeReport:

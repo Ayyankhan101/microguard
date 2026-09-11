@@ -63,6 +63,20 @@ pip install .
 - Python 3.10+ (the codebase uses `X | Y` union type hints throughout)
 - [micrograd](https://github.com/karpathy/micrograd) (installed automatically)
 
+## Documentation
+
+Full docs live in [`docs/`](docs/README.md), organized by what you are trying to
+do. The fastest ways in:
+
+| If you want to… | Read |
+|---|---|
+| Find bots in a log file | [Your first scan](docs/tutorial-first-scan.md) |
+| Block bots in real time | [Block your first bot](docs/tutorial-real-time-blocking.md) |
+| Watch decisions in a browser | [Watch a bot get blocked](docs/tutorial-the-dashboard.md) |
+| Look up a flag or a payload | [CLI reference](docs/reference-cli.md) · [Live API reference](docs/reference-live-api.md) |
+| Understand a verdict | [The heuristic rules](docs/reference-heuristic-rules.md) · [The 19 features](docs/reference-features.md) |
+| Judge whether to trust it | [How detection works](docs/explanation-how-detection-works.md) · [Where the labels come from](docs/explanation-training-data.md) |
+
 ## Quick Start
 
 ```bash
@@ -247,13 +261,14 @@ requests to one endpoint" (0.80) and "high request rate" (0.75) need the model
 to agree. Those weaker rules also describe a legitimate polling client or a
 single-endpoint GraphQL app, which is why they do not get to block on their own.
 
-**Full documentation:** [tutorial](docs/tutorial-real-time-blocking.md) ·
+**Live-path documentation:** [tutorial](docs/tutorial-real-time-blocking.md) ·
 [deploy behind nginx](docs/howto-deploy-behind-nginx.md) ·
 [deploy in-process](docs/howto-deploy-in-process.md) ·
 [tune blocking](docs/howto-tune-blocking.md) ·
-[run the dashboard](docs/howto-run-the-dashboard.md) ·
 [API reference](docs/reference-live-api.md) ·
 [how it works](docs/explanation-how-blocking-works.md)
+
+**Everything else:** [the documentation index](docs/README.md).
 
 Two settings matter before you deploy:
 
@@ -317,7 +332,9 @@ reachable from elsewhere.
 cd gui && npm ci && npm run build
 ```
 
-See [how to run the dashboard](docs/howto-run-the-dashboard.md).
+See [watch a bot get blocked](docs/tutorial-the-dashboard.md) for a walk-through,
+[how to run the dashboard](docs/howto-run-the-dashboard.md) for the reference,
+and [working on the UI](docs/howto-work-on-the-gui.md) if you are changing it.
 
 ## Score Interpretation
 

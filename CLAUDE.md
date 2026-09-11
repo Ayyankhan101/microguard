@@ -20,8 +20,8 @@ Bot Traffic Audit Tool powered by micrograd. Detects malicious bot traffic in AP
   - `training/` — Training pipeline
 - `gui/` — TypeScript dashboard (Vite + React). `npm run build` writes
   `microguard/dashboard/static/`, which ships in the wheel
-- `docs/` — Diataxis documentation for the live blocking path
-  (tutorial / how-to / reference / explanation)
+- `docs/` — Diataxis documentation, indexed by `docs/README.md`
+  (3 tutorials / 9 how-tos / 5 references / 4 explanations)
 - `tests/` — pytest tests (497 passing); `gui/src/**/*.test.*` — vitest (87 passing)
 - `data/` — Model weights, sample logs
 

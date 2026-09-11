@@ -26,7 +26,7 @@ def _load_harvard():
     path = os.path.join(DATA_DIR, 'harvard_training_data.json')
     if not os.path.exists(path):
         pytest.skip("Harvard training data not found")
-    with open(path) as f:
+    with open(path, encoding='utf-8') as f:
         return json.load(f)
 
 
@@ -38,7 +38,7 @@ def _load_training_data():
     for name in ('real_bot_training_data.json', 'harvard_training_data.json'):
         path = os.path.join(DATA_DIR, name)
         if os.path.exists(path):
-            with open(path) as f:
+            with open(path, encoding='utf-8') as f:
                 return json.load(f)
     pytest.skip("no primary training data file found")
 
@@ -47,7 +47,7 @@ def _load_holdout():
     path = os.path.join(DATA_DIR, 'eval_holdout.json')
     if not os.path.exists(path):
         pytest.skip("eval_holdout.json not found — retrain with a held-out split first")
-    with open(path) as f:
+    with open(path, encoding='utf-8') as f:
         return json.load(f)
 
 
@@ -55,7 +55,7 @@ def _load_normalization():
     path = os.path.join(DATA_DIR, 'normalization.json')
     if not os.path.exists(path):
         pytest.skip("normalization.json not found")
-    with open(path) as f:
+    with open(path, encoding='utf-8') as f:
         return json.load(f)
 
 
@@ -428,7 +428,7 @@ class TestAdversarialRobustness:
         path = os.path.join(DATA_DIR, 'adversarial_eval.json')
         if not os.path.exists(path):
             pytest.skip("adversarial_eval.json not found — retrain first")
-        with open(path) as f:
+        with open(path, encoding='utf-8') as f:
             data = json.load(f)
 
         model = _load_model()
@@ -457,7 +457,7 @@ class TestCrossDataset:
         if not os.path.exists(path):
             pytest.skip("real_training_data.json not found")
 
-        with open(path) as f:
+        with open(path, encoding='utf-8') as f:
             data = json.load(f)
 
         assert 'features' in data

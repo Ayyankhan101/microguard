@@ -184,7 +184,7 @@ class TestLoadErrors:
         path = tmp_path / "model.json"
         path.write_text(json.dumps({
             "num_features": 19, "architecture": [4, 1], "weights": [0.1, 0.2],
-        }))
+        }), encoding='utf-8')
         model = BotDetector()
 
         with pytest.raises(ValueError, match="weight tensors"):
@@ -194,7 +194,7 @@ class TestLoadErrors:
         path = tmp_path / "model.json"
         path.write_text(json.dumps({
             "num_features": 19, "architecture": [4, 1], "weights": [0.1],
-        }))
+        }), encoding='utf-8')
 
         with pytest.raises(ValueError, match="weight tensors"):
             BotDetector(str(path))
@@ -202,9 +202,9 @@ class TestLoadErrors:
     def test_a_model_without_normalization_beside_it_warns(self, tmp_path, caplog):
         """predict() silently skips scaling when the params are absent, which
         once dropped held-out recall from 100% to 2.4% without failing."""
-        source = json.loads((DATA_MODEL).read_text())
+        source = json.loads((DATA_MODEL).read_text(encoding='utf-8'))
         path = tmp_path / "model.json"
-        path.write_text(json.dumps(source))
+        path.write_text(json.dumps(source), encoding='utf-8')
 
         with caplog.at_level(logging.WARNING):
             model = BotDetector()

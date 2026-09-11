@@ -62,6 +62,10 @@ python gui/scripts/capture_fixtures.py   # Recapture API fixtures after a shape 
 - `watch_logfile()` takes a test-only `_max_iterations` param to terminate
   its otherwise-infinite loop; don't use it from product code. The dashboard's
   `decision_stream()` has the same seam, named `_max_ticks`.
+- Tests that read a file the product wrote must pass `encoding='utf-8'` to
+  `read_text()`. Windows defaults to the locale codepage (cp1252) and every
+  report format contains emoji, so an encoding-less read passes on
+  Linux/macOS and fails only on the Windows matrix jobs.
 - The zod schemas in `gui/src/api/schemas.ts` are checked against real API
   payloads captured in `gui/src/api/__fixtures__/`. Change a Python response
   shape and you must rerun `gui/scripts/capture_fixtures.py` — CI fails on

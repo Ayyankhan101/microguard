@@ -181,7 +181,7 @@ class TestModel:
     def test_evaluates_the_holdout_set(self, client):
         import json
 
-        with open("data/eval_holdout.json") as handle:
+        with open("data/eval_holdout.json", encoding='utf-8') as handle:
             expected_samples = json.load(handle)["n_samples"]
 
         response = client.post(
@@ -226,8 +226,8 @@ class TestStaticSpa:
     def built_client(self, tmp_path):
         from microguard.dashboard.app import create_app
 
-        (tmp_path / "index.html").write_text("<title>Microguard</title>")
-        (tmp_path / "app.js").write_text("console.log(1)")
+        (tmp_path / "index.html").write_text("<title>Microguard</title>", encoding='utf-8')
+        (tmp_path / "app.js").write_text("console.log(1)", encoding='utf-8')
         return TestClient(create_app(static_dir=str(tmp_path)))
 
     def test_serves_the_index_at_the_root(self, built_client):
@@ -371,7 +371,7 @@ class TestPathResolution:
     def test_a_file_inside_resolves(self, tmp_path):
         from microguard.dashboard.paths import resolve_within
 
-        (tmp_path / "a.log").write_text("x")
+        (tmp_path / "a.log").write_text("x", encoding='utf-8')
 
         assert resolve_within(str(tmp_path), "a.log") is not None
 
@@ -382,7 +382,7 @@ class TestSpaFallbackEdges:
         StaticFiles 404 must surface unchanged."""
         from microguard.dashboard.app import create_app
 
-        (tmp_path / "app.js").write_text("console.log(1)")
+        (tmp_path / "app.js").write_text("console.log(1)", encoding='utf-8')
         client = TestClient(create_app(static_dir=str(tmp_path)))
 
         assert client.get("/some/route").status_code == 404

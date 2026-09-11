@@ -112,7 +112,7 @@ class TestSaveDataset:
 
         generate.save_dataset(features, labels, str(path))
 
-        payload = json.loads(path.read_text())
+        payload = json.loads(path.read_text(encoding='utf-8'))
         assert payload['n_samples'] == 10
         assert payload['n_features'] == FEATURE_COUNT
         assert payload['n_bot'] + payload['n_human'] == 10
@@ -341,7 +341,7 @@ class TestTrainModel:
 
         assert model_path.exists()
         assert (tmp_path / "normalization.json").exists()
-        saved = json.loads(model_path.read_text())
+        saved = json.loads(model_path.read_text(encoding='utf-8'))
         assert saved['num_features'] == FEATURE_COUNT
         assert len(saved['weights']) == 85
 
@@ -364,7 +364,7 @@ class TestTrainModel:
         train_model(features, labels, model_path=str(tmp_path / "model.json"),
                     epochs=2, group_ids=group_ids, provenance=provenance)
 
-        holdout = json.loads((tmp_path / "eval_holdout.json").read_text())
+        holdout = json.loads((tmp_path / "eval_holdout.json").read_text(encoding='utf-8'))
         assert holdout['n_samples'] == holdout['n_bot'] + holdout['n_human']
         assert holdout['n_features'] == FEATURE_COUNT
         assert holdout['provenance'] is not None
@@ -377,7 +377,7 @@ class TestTrainModel:
         train_model(features, labels, model_path=str(tmp_path / "model.json"),
                     epochs=2, group_ids=group_ids, provenance=provenance)
 
-        adversarial = json.loads((tmp_path / "adversarial_eval.json").read_text())
+        adversarial = json.loads((tmp_path / "adversarial_eval.json").read_text(encoding='utf-8'))
         assert adversarial['n_bot'] == adversarial['n_human']
         assert 'not proof' in adversarial['note'] or 'NOT strong evidence' in adversarial['note']
 
@@ -416,7 +416,7 @@ class TestMainDispatch:
         payload = {'features': features, 'labels': labels,
                    'n_human': labels.count(0.0), 'n_bot': labels.count(1.0)}
         payload.update(extra)
-        path.write_text(json.dumps(payload))
+        path.write_text(json.dumps(payload), encoding='utf-8')
 
     def _rows(self, n=8):
         features = [[1.0 if i % 2 else 0.0] * FEATURE_COUNT for i in range(n)]
@@ -467,7 +467,7 @@ class TestMainDispatch:
                 f'10.0.0.{i % 3} - - [24/Mar/2023:17:{i:02d}:41 +0000] '
                 f'"GET /page/{i} HTTP/1.1" 200 100 "-" "python-requests/2.28.0"'
             )
-        (tmp_path / "access.log").write_text("\n".join(lines) + "\n")
+        (tmp_path / "access.log").write_text("\n".join(lines) + "\n", encoding='utf-8')
 
         main(data_dir=str(tmp_path), epochs=2)
 
@@ -605,16 +605,16 @@ class TestBuildDataset:
         # A heuristic-only bot: no rule match, but the labeler calls it a bot.
         for i in range(5):
             lines.append(self._log_line("python-requests/2.28.0", f"/api/{i}", 10 + i))
-        (log_dir / "web-access.log").write_text("\n".join(lines) + "\n")
+        (log_dir / "web-access.log").write_text("\n".join(lines) + "\n", encoding='utf-8')
 
         rules_path = tmp_path / "rules.yaml"
-        rules_path.write_text(self.RULES)
+        rules_path.write_text(self.RULES, encoding='utf-8')
 
         harvard = tmp_path / "harvard_training_data.json"
         harvard.write_text(json.dumps({
             'features': [[0.0] * FEATURE_COUNT for _ in range(40)],
             'labels': [0.0] * 40,
-        }))
+        }), encoding='utf-8')
 
         monkeypatch.setattr(brd, "ORGX_LOG_GLOB", str(log_dir / "web-access.log*"))
         monkeypatch.setattr(brd, "ORGX_RULES_PATH", str(rules_path))
@@ -703,14 +703,14 @@ class TestBuildDataset:
         log_dir.mkdir()
         (log_dir / "web-access.log").write_text("\n".join(
             self._log_line("Go-http-client/1.1", f"/scan/{i}", i) for i in range(2)
-        ) + "\n")
-        (tmp_path / "rules.yaml").write_text(self.RULES)
+        ) + "\n", encoding='utf-8')
+        (tmp_path / "rules.yaml").write_text(self.RULES, encoding='utf-8')
         # A human class, so the dataset is non-empty once the short session is
         # dropped — see test_an_empty_corpus_raises for what happens without it.
         (tmp_path / "harvard_training_data.json").write_text(json.dumps({
             'features': [[0.0] * FEATURE_COUNT for _ in range(4)],
             'labels': [0.0] * 4,
-        }))
+        }), encoding='utf-8')
 
         monkeypatch.setattr(brd, "ORGX_LOG_GLOB", str(log_dir / "web-access.log*"))
         monkeypatch.setattr(brd, "ORGX_RULES_PATH", str(tmp_path / "rules.yaml"))
@@ -732,8 +732,8 @@ class TestBuildDataset:
 
         log_dir = tmp_path / "log"
         log_dir.mkdir()
-        (log_dir / "web-access.log").write_text("")
-        (tmp_path / "rules.yaml").write_text(self.RULES)
+        (log_dir / "web-access.log").write_text("", encoding='utf-8')
+        (tmp_path / "rules.yaml").write_text(self.RULES, encoding='utf-8')
 
         monkeypatch.setattr(brd, "ORGX_LOG_GLOB", str(log_dir / "web-access.log*"))
         monkeypatch.setattr(brd, "ORGX_RULES_PATH", str(tmp_path / "rules.yaml"))
@@ -758,6 +758,6 @@ class TestBuildDataset:
 
         out = tmp / "real_bot_training_data.json"
         assert out.exists()
-        payload = json.loads(out.read_text())
+        payload = json.loads(out.read_text(encoding='utf-8'))
         assert payload['n_samples'] > 0
         assert 'Dataset saved to' in capsys.readouterr().out

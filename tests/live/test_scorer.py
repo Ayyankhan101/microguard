@@ -191,7 +191,7 @@ def test_scorer_without_a_model_says_so(store):
 def test_load_model_corrupt_file(tmp_path, caplog):
     """A corrupt model degrades to heuristics, and logs why."""
     corrupt = tmp_path / "corrupt.json"
-    corrupt.write_text("not valid json {{{")
+    corrupt.write_text("not valid json {{{", encoding='utf-8')
     with caplog.at_level(logging.WARNING):
         assert _load_model(str(corrupt)) is None
     assert "failed to load" in caplog.text

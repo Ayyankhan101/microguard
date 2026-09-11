@@ -120,19 +120,19 @@ class TestFormatDetection:
     
     def test_detect_nginx(self, tmp_path):
         log_file = tmp_path / "test.log"
-        log_file.write_text(NGINX_HUMAN + "\n" + NGINX_BOT + "\n")
+        log_file.write_text(NGINX_HUMAN + "\n" + NGINX_BOT + "\n", encoding='utf-8')
         fmt = detect_format(str(log_file))
         assert fmt == 'nginx'
     
     def test_detect_json(self, tmp_path):
         log_file = tmp_path / "test.log"
-        log_file.write_text(JSON_HUMAN + "\n" + JSON_BOT + "\n")
+        log_file.write_text(JSON_HUMAN + "\n" + JSON_BOT + "\n", encoding='utf-8')
         fmt = detect_format(str(log_file))
         assert fmt == 'json'
     
     def test_detect_unknown(self, tmp_path):
         log_file = tmp_path / "test.log"
-        log_file.write_text("random text\nmore random text\n")
+        log_file.write_text("random text\nmore random text\n", encoding='utf-8')
         fmt = detect_format(str(log_file))
         assert fmt == 'unknown'
 
@@ -142,7 +142,7 @@ class TestParseFile:
     
     def test_parse_nginx_file(self, tmp_path):
         log_file = tmp_path / "test.log"
-        log_file.write_text(NGINX_HUMAN + "\n" + NGINX_BOT + "\n")
+        log_file.write_text(NGINX_HUMAN + "\n" + NGINX_BOT + "\n", encoding='utf-8')
         
         entries = list(parse_file(str(log_file)))
         assert len(entries) == 2
@@ -151,7 +151,7 @@ class TestParseFile:
     
     def test_parse_json_file(self, tmp_path):
         log_file = tmp_path / "test.log"
-        log_file.write_text(JSON_HUMAN + "\n" + JSON_BOT + "\n")
+        log_file.write_text(JSON_HUMAN + "\n" + JSON_BOT + "\n", encoding='utf-8')
         
         entries = list(parse_file(str(log_file), fmt='json'))
         assert len(entries) == 2
@@ -159,7 +159,7 @@ class TestParseFile:
     def test_parse_missing_file(self):
         """Asserts the message, not just the type.
 
-        With fmt='auto' the exception comes from detect_format's bare open()
+        With fmt='auto' the exception comes from detect_format's bare open(, encoding='utf-8')
         and reads "[Errno 2] No such file or directory" — so the handler in
         parse_file that produces the friendly message was never reached, and
         a `pytest.raises(FileNotFoundError)` alone passed anyway. An explicit

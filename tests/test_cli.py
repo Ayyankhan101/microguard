@@ -372,6 +372,7 @@ class TestBaseInstallImports:
             [sys.executable, "-c", probe],
             capture_output=True,
             text=True,
+            encoding='utf-8',
             check=False,  # the assertion below reports the failure with stderr
         )
         assert result.returncode == 0, (
@@ -401,6 +402,7 @@ class TestBaseInstallImports:
             [sys.executable, "-c", probe],
             capture_output=True,
             text=True,
+            encoding='utf-8',
             check=False,  # the assertion below reports the failure with stderr
         )
         assert result.returncode == 0, result.stderr
@@ -508,7 +510,7 @@ class TestScanOutputDispatch:
         self._run(monkeypatch, ['scan', path, '--verbose', '--output-file', str(out)])
 
         assert out.exists()
-        assert 'Verbose' in out.read_text()
+        assert 'Verbose' in out.read_text(encoding='utf-8')
 
     def test_verbose_wins_over_output_format(self, monkeypatch, capsys, nginx_log_file):
         path = nginx_log_file(_bot_session_lines())
@@ -530,7 +532,7 @@ class TestScanOutputDispatch:
 
         self._run(monkeypatch, ['scan', path, '--output', 'nginx', '--output-file', str(out)])
 
-        assert 'deny ' in out.read_text()
+        assert 'deny ' in out.read_text(encoding='utf-8')
 
     def test_output_file_writes_a_cloudflare_rule(self, monkeypatch, tmp_path, nginx_log_file):
         path = nginx_log_file(_bot_session_lines())
@@ -538,7 +540,7 @@ class TestScanOutputDispatch:
 
         self._run(monkeypatch, ['scan', path, '--output', 'cloudflare', '--output-file', str(out)])
 
-        assert 'ip.src' in out.read_text()
+        assert 'ip.src' in out.read_text(encoding='utf-8')
 
     def test_output_file_writes_html(self, monkeypatch, tmp_path, nginx_log_file):
         path = nginx_log_file(_bot_session_lines())
@@ -546,7 +548,7 @@ class TestScanOutputDispatch:
 
         self._run(monkeypatch, ['scan', path, '--output', 'html', '--output-file', str(out)])
 
-        assert '<!DOCTYPE html>' in out.read_text()
+        assert '<!DOCTYPE html>' in out.read_text(encoding='utf-8')
 
     def test_output_file_writes_json(self, monkeypatch, tmp_path, nginx_log_file):
         import json as json_module
@@ -556,7 +558,7 @@ class TestScanOutputDispatch:
 
         self._run(monkeypatch, ['scan', path, '--output', 'json', '--output-file', str(out)])
 
-        assert json_module.loads(out.read_text())['total_sessions'] >= 1
+        assert json_module.loads(out.read_text(encoding='utf-8'))['total_sessions'] >= 1
 
     def test_output_file_writes_the_terminal_report(self, monkeypatch, tmp_path, nginx_log_file):
         path = nginx_log_file(_bot_session_lines())
@@ -564,7 +566,7 @@ class TestScanOutputDispatch:
 
         self._run(monkeypatch, ['scan', path, '--output-file', str(out)])
 
-        assert 'Microguard Bot Traffic Report' in out.read_text()
+        assert 'Microguard Bot Traffic Report' in out.read_text(encoding='utf-8')
 
 
 class TestProbeOutputDispatch:
@@ -616,7 +618,7 @@ class TestProbeOutputDispatch:
         self._run(monkeypatch, ['probe', 'https://example.com',
                                 '--output', 'html', '--output-file', str(out)])
 
-        assert '<!DOCTYPE html>' in out.read_text()
+        assert '<!DOCTYPE html>' in out.read_text(encoding='utf-8')
 
     def test_probe_json_output(self, monkeypatch, capsys):
         monkeypatch.setattr('microguard.scanner.probe_and_analyze', self._fake_probe)
@@ -646,7 +648,7 @@ class TestProbeOutputDispatch:
         self._run(monkeypatch, ['probe', 'wss://example.com/s',
                                 '--output', 'html', '--output-file', str(out)])
 
-        assert '<!DOCTYPE html>' in out.read_text()
+        assert '<!DOCTYPE html>' in out.read_text(encoding='utf-8')
 
 
 class TestScanModelFallbacks:
@@ -655,7 +657,7 @@ class TestScanModelFallbacks:
 
         path = nginx_log_file(_bot_session_lines())
         bad_model = tmp_path / "model.json"
-        bad_model.write_text('{"weights": [0.1]}')
+        bad_model.write_text('{"weights": [0.1]}', encoding='utf-8')
 
         results = scan_logfile(path, model_path=str(bad_model))
 

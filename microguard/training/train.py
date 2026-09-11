@@ -196,7 +196,7 @@ def train_model(
     # Save normalization params
     norm_path = os.path.join(os.path.dirname(model_path) or '.', 'normalization.json')
     os.makedirs(os.path.dirname(norm_path) or '.', exist_ok=True)
-    with open(norm_path, 'w') as f:
+    with open(norm_path, 'w', encoding='utf-8') as f:
         json.dump({'mins': mins, 'maxs': maxs}, f, indent=2)
     print(f"   Normalization saved to: {norm_path}")
     
@@ -272,7 +272,7 @@ def train_model(
     if holdout_features is not None and holdout_labels is not None:
         holdout_path = os.path.join(os.path.dirname(model_path) or '.', 'eval_holdout.json')
         n_bot_h = sum(1 for lbl in holdout_labels if lbl > 0.5)
-        with open(holdout_path, 'w') as f:
+        with open(holdout_path, 'w', encoding='utf-8') as f:
             json.dump({
                 'features': holdout_features,
                 'labels': holdout_labels,
@@ -344,7 +344,7 @@ def train_model(
             adv_labels = [1.0] * len(adv_bot_features) + [0.0] * len(adv_human_features)
 
             adv_path = os.path.join(os.path.dirname(model_path) or '.', 'adversarial_eval.json')
-            with open(adv_path, 'w') as f:
+            with open(adv_path, 'w', encoding='utf-8') as f:
                 json.dump({
                     'features': adv_features,
                     'labels': adv_labels,
@@ -417,7 +417,7 @@ def main(data_dir: str | None = None, epochs: int = 100, learning_rate: float = 
     real_bot_path = os.path.join(data_dir, 'real_bot_training_data.json')
     if os.path.exists(real_bot_path):
         print(f"📂 Loading real bot-training data from: {real_bot_path}")
-        with open(real_bot_path) as f:
+        with open(real_bot_path, encoding='utf-8') as f:
             data = json.load(f)
         features = data['features']
         labels = data['labels']
@@ -429,7 +429,7 @@ def main(data_dir: str | None = None, epochs: int = 100, learning_rate: float = 
     # Priority 1: Harvard training data (pre-processed from Dataverse)
     elif os.path.exists(harvard_path := os.path.join(data_dir, 'harvard_training_data.json')):
         print(f"📂 Loading Harvard training data from: {harvard_path}")
-        with open(harvard_path) as f:
+        with open(harvard_path, encoding='utf-8') as f:
             data = json.load(f)
         features = data['features']
         labels = data['labels']
@@ -439,7 +439,7 @@ def main(data_dir: str | None = None, epochs: int = 100, learning_rate: float = 
     elif os.path.exists(os.path.join(data_dir, 'real_training_data.json')):
         real_path = os.path.join(data_dir, 'real_training_data.json')
         print(f"📂 Loading real training data from: {real_path}")
-        with open(real_path) as f:
+        with open(real_path, encoding='utf-8') as f:
             data = json.load(f)
         features = data['features']
         labels = data['labels']

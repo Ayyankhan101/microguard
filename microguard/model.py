@@ -251,7 +251,13 @@ class BotDetector:
         return losses
     
     def save(self, filepath: str):
-        """Save model weights to JSON file."""
+        """Save model weights to JSON file.
+
+        encoding='utf-8' explicit here and on every other open() in the
+        package: without it Python falls back to the OS locale encoding
+        (cp1252 on Windows), so the same file round-trips differently per
+        platform. See parser.py::_open_text for where this first bit.
+        """
         weights = []
         for param in self.model.parameters():
             weights.append(param.data)
@@ -262,7 +268,7 @@ class BotDetector:
             'weights': weights,
         }
         
-        with open(filepath, 'w') as f:
+        with open(filepath, 'w', encoding='utf-8') as f:
             json.dump(data, f, indent=2)
     
     def load(self, filepath: str):
@@ -275,7 +281,7 @@ class BotDetector:
         and nothing failed: predict() simply skips normalization when the
         params are absent. A half-loaded model must not be a reachable state.
         """
-        with open(filepath, 'r') as f:
+        with open(filepath, 'r', encoding='utf-8') as f:
             data = json.load(f)
         
         weights = data['weights']
@@ -292,7 +298,7 @@ class BotDetector:
 
         norm_path = os.path.join(os.path.dirname(filepath), 'normalization.json')
         if os.path.exists(norm_path):
-            with open(norm_path) as f:
+            with open(norm_path, encoding='utf-8') as f:
                 norm_data = json.load(f)
             self.norm_mins = norm_data['mins']
             self.norm_maxs = norm_data['maxs']

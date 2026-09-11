@@ -299,7 +299,7 @@ def save_dataset(
         'n_bot': sum(1 for l in labels if l == 1.0),
     }
     
-    with open(filepath, 'w') as f:
+    with open(filepath, 'w', encoding='utf-8') as f:
         json.dump(data, f, indent=2)
     
     print(f"💾 Dataset saved to: {filepath}")

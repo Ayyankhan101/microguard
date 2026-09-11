@@ -152,6 +152,15 @@ than a regression.
     `FileNotFoundError` from a bare `open()` inside `detect_format`, not the
     handler it was named for. It now passes an explicit format and matches the
     message.
+- **Twelve `open()` calls in the package had no explicit encoding** — in
+  `model.py`, `training/train.py`, `training/build_real_dataset.py` and
+  `training/generate.py`. Without one, Python falls back to the OS locale
+  encoding, so `model.json` and every training artifact round-trip differently
+  on a Windows host than on Linux. Latent rather than live, since `json.dump`
+  writes ASCII by default, but it is the same defect `parser.py::_open_text`
+  was fixed for, and the test suite hit the reading half of it on the Windows
+  CI jobs. Found by sweeping with `PYTHONWARNDEFAULTENCODING`, which now
+  reports nothing for the package or the suite.
 - **`microguard/training/generate.py` wrote outside the repo's data
   directory** — its `__main__` block walked two `dirname`s instead of three, so
   `python -m microguard.training.generate` created

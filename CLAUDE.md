@@ -45,8 +45,34 @@ python gui/scripts/capture_fixtures.py   # Recapture API fixtures after a shape 
 - test: pytest
 - coverage: pytest --cov=microguard --cov-report=term-missing (100%; CI gates at 98% via --cov-fail-under)
 - frontend: cd gui && npx tsc -b && npm test
+- browser: pytest tests/browser/ (needs `pip install playwright && playwright
+  install chromium`; skips cleanly without it, and CI fails the job if it does)
 - deadcode: vulture microguard microguard/vulture_whitelist.py
 - shell: skip (no shell scripts)
+
+### CI-parity lanes
+
+Local green is not CI green. A full local run passed while CI failed 13 of 15
+jobs, because two things CI checks cannot be observed from a machine that has
+Redis and a stable clock. Run these on a **clean tree** before pushing:
+
+- fixtures: `python gui/scripts/capture_fixtures.py && git diff --exit-code -- gui/src/api/__fixtures__`
+
+  CI recaptures the fixtures and diffs them, so ANY non-deterministic field in
+  an API payload makes that job permanently red — it can never match the
+  committed file. `_stabilize()` in the capture script pins the known ones
+  (wall-clock stamps, the uuid4 decision id). Adding a random or time-derived
+  field to a decision means adding it there in the same change. This has bitten
+  twice: once for `time.time()`, once for `uuid4()`.
+
+- matrix coverage: `pytest --cov=microguard --cov-config=.coveragerc-matrix --cov-report=term --cov-fail-under=98 --deselect tests/live`
+
+  The cross-platform matrix has no Redis, so every `tests/live/` test skips and
+  `microguard/live` cannot execute there. It is omitted via
+  `.coveragerc-matrix` and gated instead in the `live (Redis-backed)` job. A
+  plain local run measures code those runners never touch, so it cannot detect
+  a drop in the number they actually compute — it read 100% locally while CI
+  read 93%.
 
 ## Test suite conventions
 

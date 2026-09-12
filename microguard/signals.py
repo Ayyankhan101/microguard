@@ -21,10 +21,18 @@ from dataclasses import dataclass, field
 # a typo would leave an operator believing a signal is enforced while it quietly
 # is not, which is worse than the signal being off.
 #
+# `hosting` is deliberately NOT here. It is resolved and recorded on every
+# decision, but no rule reads it: a datacenter IP is weak evidence on its own,
+# and spec 0002 left the combination rule open because choosing it needs real
+# traffic rather than a guess. Listing it as promotable would let an operator
+# tick a box, see an "enforced" badge, and get no enforcement at all -- a
+# control that silently does nothing is worse than an absent one. Add it here
+# in the same change that adds the rule.
+#
 # Lives here rather than in live/runtime_config.py because the dashboard reads
 # it to render its promotion control, and the dashboard must run without
 # redis-py -- live/__init__.py raises ImportError without it.
-KNOWN_SIGNAL_SOURCES = frozenset({"tor", "hosting", "abuseipdb", "fingerprint"})
+KNOWN_SIGNAL_SOURCES = frozenset({"tor", "abuseipdb", "fingerprint"})
 
 
 @dataclass(frozen=True)

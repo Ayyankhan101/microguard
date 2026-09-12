@@ -576,8 +576,13 @@ class TestSignalPromotionEndpoint:
 
     def test_reading_reports_the_known_sources(self, client):
         body = client.get("/api/live/config").json()
-        assert set(body["known_signals"]) == {"tor", "hosting", "abuseipdb", "fingerprint"}
+        assert set(body["known_signals"]) == {"tor", "abuseipdb", "fingerprint"}
         assert body["promoted_signals"] == []
+
+    def test_hosting_is_not_offered_because_no_rule_reads_it(self, client):
+        """It is resolved and recorded, but nothing enforces it. Offering it
+        would give an operator an 'enforced' badge and zero enforcement."""
+        assert "hosting" not in client.get("/api/live/config").json()["known_signals"]
 
     def test_writing_is_refused_without_the_flag(self, client):
         response = client.put(

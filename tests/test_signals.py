@@ -127,3 +127,24 @@ class TestImportIsolation:
             [sys.executable, "-c", code], capture_output=True, check=False
         )
         assert result.returncode == 0, "importing the dashboard API pulled in redis"
+
+
+class TestPromotableSourcesMatchTheRules:
+    """Every promotable source must have a rule that reads it.
+
+    A source listed here but never consulted lets an operator promote it, see
+    an "enforced" badge, and get no enforcement -- permanently and silently.
+    This is the check that would have caught `hosting`.
+    """
+
+    def test_every_known_source_is_read_by_a_rule(self):
+        import inspect
+
+        from microguard import labeler
+        from microguard.signals import KNOWN_SIGNAL_SOURCES
+
+        source = inspect.getsource(labeler)
+        for name in KNOWN_SIGNAL_SOURCES:
+            assert f'is_promoted("{name}")' in source, (
+                f"{name!r} is promotable but no labeler rule reads it"
+            )

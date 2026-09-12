@@ -158,28 +158,28 @@ class TestActorRecord:
         _seed_session(clean, "203.0.113.5")
         record_fingerprint(clean, "203.0.113.5", HASH_A)
 
-        actor = json.loads(clean.get(f"{ACTOR_PREFIX}{HASH_A}"))
-        assert actor["first_seen"] > 0
-        assert actor["sightings"] == 1
+        actor = clean.hgetall(f"{ACTOR_PREFIX}{HASH_A}")
+        assert float(actor["first_seen"]) > 0
+        assert int(actor["sightings"]) == 1
 
     def test_a_return_visit_from_a_new_ip_increments_sightings(self, clean):
         for ip in ("203.0.113.5", "198.51.100.7"):
             _seed_session(clean, ip)
             record_fingerprint(clean, ip, HASH_A)
 
-        actor = json.loads(clean.get(f"{ACTOR_PREFIX}{HASH_A}"))
-        assert actor["sightings"] == 2
-        assert actor["distinct_ips"] == 2
+        actor = clean.hgetall(f"{ACTOR_PREFIX}{HASH_A}")
+        assert int(actor["sightings"]) == 2
+        assert int(actor["distinct_ips"]) == 2
 
     def test_the_first_seen_timestamp_does_not_move(self, clean):
         _seed_session(clean, "203.0.113.5")
         record_fingerprint(clean, "203.0.113.5", HASH_A)
-        first = json.loads(clean.get(f"{ACTOR_PREFIX}{HASH_A}"))["first_seen"]
+        first = clean.hget(f"{ACTOR_PREFIX}{HASH_A}", "first_seen")
 
         _seed_session(clean, "198.51.100.7")
         record_fingerprint(clean, "198.51.100.7", HASH_A)
 
-        assert json.loads(clean.get(f"{ACTOR_PREFIX}{HASH_A}"))["first_seen"] == first
+        assert clean.hget(f"{ACTOR_PREFIX}{HASH_A}", "first_seen") == first
 
     def test_the_record_has_a_sliding_ttl(self, clean):
         """The only structure here that outlives a session. It slides on each
@@ -190,12 +190,16 @@ class TestActorRecord:
 
         assert 0 < clean.ttl(f"{ACTOR_PREFIX}{HASH_A}") <= 1000
 
-    def test_a_corrupt_actor_record_is_replaced_rather_than_fatal(self, clean):
+    def test_a_wrong_type_at_the_actor_key_is_replaced_rather_than_fatal(self, clean, caplog):
+        """HINCRBY against a string is WRONGTYPE. Nothing in this package
+        writes one at a v2 key, but losing an actor permanently over one bad
+        value is the worse outcome."""
         _seed_session(clean, "203.0.113.5")
-        clean.set(f"{ACTOR_PREFIX}{HASH_A}", "{not json")
+        clean.set(f"{ACTOR_PREFIX}{HASH_A}", "not a hash")
 
         assert record_fingerprint(clean, "203.0.113.5", HASH_A) is None
-        assert json.loads(clean.get(f"{ACTOR_PREFIX}{HASH_A}"))["sightings"] == 1
+        assert int(clean.hget(f"{ACTOR_PREFIX}{HASH_A}", "sightings")) == 1
+        assert "wrong type" in caplog.text
 
 
 class TestCorruptBinding:
@@ -213,3 +217,117 @@ class TestCorruptBinding:
         clean.set(f"{FP_PREFIX}203.0.113.5", json.dumps({"shared_ips": 3}))
 
         assert record_fingerprint(clean, "203.0.113.5", HASH_A) is None
+
+
+class TestBindingIsAtomic:
+    """The first-hash-wins gate has to survive concurrency.
+
+    A check-then-set version of this passed every test above and was still
+    defeated by two concurrent requests: both read "no binding", both passed
+    the gate, and both bound. That let one IP with a live session bind
+    unlimited harvested hashes, inflating the cross-IP count for each -- which
+    is exactly the amplification the binding rule exists to prevent.
+    """
+
+    def test_concurrent_distinct_hashes_bind_exactly_one(self, clean):
+        import threading
+
+        _seed_session(clean, "203.0.113.5")
+        hashes = [f"{i:064x}" for i in range(12)]
+        results = []
+        barrier = threading.Barrier(len(hashes))
+
+        def submit(h):
+            barrier.wait(timeout=5)
+            results.append(record_fingerprint(clean, "203.0.113.5", h))
+
+        threads = [threading.Thread(target=submit, args=(h,)) for h in hashes]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=10)
+
+        assert results.count(None) == 1, "more than one hash won the binding"
+        assert results.count(RejectReason.ALREADY_BOUND) == len(hashes) - 1
+
+    def test_only_the_winning_hash_gets_an_ip_recorded(self, clean):
+        import threading
+
+        _seed_session(clean, "203.0.113.5")
+        hashes = [f"{i:064x}" for i in range(12)]
+        barrier = threading.Barrier(len(hashes))
+
+        def submit(h):
+            barrier.wait(timeout=5)
+            record_fingerprint(clean, "203.0.113.5", h)
+
+        threads = [threading.Thread(target=submit, args=(h,)) for h in hashes]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=10)
+
+        populated = [h for h in hashes if clean.scard(f"{FP_IPS_PREFIX}{h}") > 0]
+        assert len(populated) == 1, f"{len(populated)} hashes were credited, expected 1"
+
+    def test_the_winner_still_records_its_cross_ip_count(self, clean):
+        """The claim happens before the count is known, so the count is
+        written in a second step. It must still land."""
+        _seed_session(clean, "203.0.113.5")
+        record_fingerprint(clean, "203.0.113.5", HASH_A)
+
+        assert json.loads(clean.get(f"{FP_PREFIX}203.0.113.5"))["shared_ips"] == 1
+
+
+class TestActorCountsAreAtomic:
+    def test_concurrent_sightings_all_count(self, clean):
+        """GET-then-SET lost increments under exactly the traffic these
+        numbers are for: a farm hitting one fingerprint hard."""
+        import threading
+
+        ips = [f"203.0.113.{i}" for i in range(12)]
+        for ip in ips:
+            _seed_session(clean, ip)
+        barrier = threading.Barrier(len(ips))
+
+        def submit(ip):
+            barrier.wait(timeout=5)
+            record_fingerprint(clean, ip, HASH_A)
+
+        threads = [threading.Thread(target=submit, args=(ip,)) for ip in ips]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=10)
+
+        actor = clean.hgetall(f"{ACTOR_PREFIX}{HASH_A}")
+        assert int(actor["sightings"]) == len(ips)
+
+    def test_first_seen_never_moves_even_under_concurrency(self, clean):
+        _seed_session(clean, "203.0.113.5")
+        record_fingerprint(clean, "203.0.113.5", HASH_A)
+        first = clean.hget(f"{ACTOR_PREFIX}{HASH_A}", "first_seen")
+
+        _seed_session(clean, "198.51.100.7")
+        record_fingerprint(clean, "198.51.100.7", HASH_A)
+
+        assert clean.hget(f"{ACTOR_PREFIX}{HASH_A}", "first_seen") == first
+
+    def test_a_v1_json_actor_record_does_not_break_the_v2_store(self, clean):
+        """HINCRBY against a string is WRONGTYPE. The session store hit this
+        exact trap once; the prefix carries a version for the same reason."""
+        assert "v2" in ACTOR_PREFIX
+
+        _seed_session(clean, "203.0.113.5")
+        clean.set("mg:v1:actor:" + HASH_A, json.dumps({"sightings": 99}))
+
+        assert record_fingerprint(clean, "203.0.113.5", HASH_A) is None
+        assert int(clean.hget(f"{ACTOR_PREFIX}{HASH_A}", "sightings")) == 1
+
+    def test_an_empty_binding_record_reads_as_unbound(self, clean):
+        """Redis can hand back an empty string for a key mid-expiry."""
+        _seed_session(clean, "203.0.113.5")
+        clean.set(f"{FP_PREFIX}203.0.113.5", "")
+
+        assert record_fingerprint(clean, "203.0.113.5", HASH_A) is None
+        assert json.loads(clean.get(f"{FP_PREFIX}203.0.113.5"))["hash"] == HASH_A

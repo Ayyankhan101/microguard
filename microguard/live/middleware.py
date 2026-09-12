@@ -17,6 +17,7 @@ Usage (Flask):
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from datetime import datetime, timezone
@@ -158,7 +159,10 @@ class MicroguardASGI:
 
         headers = {k.decode().lower(): v.decode() for k, v in scope.get("headers", [])}
         ip = _extract_ip(headers, self._trust_xff, _asgi_client(scope))
-        status, payload = handle_fp_post(self._r, ip, body)
+        # Off the event loop: handle_fp_post talks to Redis synchronously,
+        # and /fp is the public route -- every page load fires one, so a
+        # blocking call here serializes every concurrent request behind it.
+        status, payload = await asyncio.to_thread(handle_fp_post, self._r, ip, body)
         await send({
             "type": "http.response.start",
             "status": status,

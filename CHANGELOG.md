@@ -62,7 +62,7 @@
     unauthenticated caller an oracle for which IPs are bindable, and would
     surface a microguard problem as an error on someone else's page.
   - Both rules are observe-only until promoted, like every other signal.
-- **Actor identity.** `mg:v1:actor:{hash}` links sessions across IP changes
+- **Actor identity.** `mg:v2:actor:{hash}` links sessions across IP changes
   with a 30-day sliding TTL. A returning fingerprint from a new address is the
   one signal IP reputation structurally cannot provide.
 - **AbuseIPDB**, optional and keyed. With no `ABUSEIPDB_API_KEY` the signal is
@@ -75,6 +75,23 @@
   rather than asserted in prose.
 
 ### Fixed
+- **`/fp`'s first-hash-wins gate was a check-then-set race**, and an attacker
+  could win it on purpose. Two concurrent submissions from one bound IP with
+  different hashes both read "nothing bound", both passed the gate, and both
+  recorded — letting a single IP with a live session credit an unlimited number
+  of harvested hashes and inflate the cross-IP count for each. That is exactly
+  the amplification the binding rule exists to prevent. The binding is now
+  claimed atomically with `SET NX`.
+- Actor records are a Redis HASH (`mg:v2:actor:`) rather than a JSON string, so
+  sightings increment with `HINCRBY` instead of a read-modify-write that lost
+  increments under precisely the traffic the number describes: a farm hitting
+  one fingerprint from many addresses at once. The prefix carries a version
+  because `HINCRBY` against a v1 string is `WRONGTYPE`.
+- `hosting` is no longer offered as a promotable signal. It is resolved and
+  recorded, but no rule reads it, so promoting it produced an "enforced" badge
+  and zero enforcement — permanently and silently. A test now asserts every
+  promotable source has a rule that reads it.
+- The ASGI `/fp` handler no longer blocks the event loop on Redis I/O.
 - The fingerprint script now says why it cannot run on a plain-HTTP origin.
   SubtleCrypto only exists in a secure context, so on HTTP the script was inert
   and no fingerprint ever arrived — which, because the absence rule reads a

@@ -34,6 +34,7 @@ import json
 import logging
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from typing import cast
 
 import redis
 
@@ -80,7 +81,7 @@ class CheckHandler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         if self.path != "/check":
-            self.send_error(404)
+            self._send_not_here()
             return
 
         # Extract client IP from X-Real-IP or X-Forwarded-For
@@ -118,6 +119,51 @@ class CheckHandler(BaseHTTPRequestHandler):
         self._send_score_headers(result)
         self.end_headers()
         self.wfile.write(json.dumps(result).encode())
+
+    def _send_not_here(self) -> None:
+        """Answer any path other than /check with an explanation.
+
+        The status stays exactly 404. nginx turns any auth_request response
+        outside 2xx/401/403 into a 500 for the visitor, so a misconfigured
+        proxy_pass pointing at the wrong path must keep producing that 500 —
+        only the body a human reads changes.
+
+        It changes because a bare stdlib 404 is a useless answer to someone who
+        opened this in a browser expecting the dashboard. This server knows
+        exactly what they did wrong and can say so.
+        """
+        # The real bound address, not a constant: a hardcoded port hands the
+        # reader a command that fails whenever this is not on 8400.
+        #
+        # server_address is typed as a union because a socketserver can bind a
+        # Unix socket, where it is a path string. run_server always binds
+        # (host, port) over TCP, so narrowing to that is safe here.
+        host, port = cast("tuple[str, int]", self.server.server_address)
+
+        body = (
+            "microguard check server\n"
+            "\n"
+            "This is the nginx auth_request endpoint, not the web UI.\n"
+            "The only route here is /check, and it is meant to be called by\n"
+            "nginx rather than opened in a browser.\n"
+            "\n"
+            "Looking for the dashboard?\n"
+            "    microguard dashboard        # http://127.0.0.1:8500\n"
+            "\n"
+            "Want to exercise this endpoint directly?\n"
+            f"    curl -s http://{host}:{port}/check \\\n"
+            "      -H 'X-Real-IP: 203.0.113.9' \\\n"
+            "      -H 'User-Agent: curl/8.0' \\\n"
+            "      -H 'X-Original-URI: /wp-admin/setup-config.php'\n"
+            "\n"
+            "Wiring it up: docs/howto-deploy-behind-nginx.md\n"
+        ).encode()
+
+        self.send_response(404)
+        self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
 
     def _send_score_headers(self, result: dict) -> None:
         """Emit the decision as headers so nginx can forward it upstream.
@@ -211,6 +257,9 @@ def run_server(
     # below is heuristics-only. Say so where an operator will actually see it.
     print(f"  model: {'loaded' if scorer.model_loaded else 'NOT LOADED (heuristics only)'}")
     print(f"  trust X-Forwarded-For: {trust_forwarded_for}")
+    # Said up front, because this server looks dead when it is working: it
+    # logs nothing per request and serves one machine-facing route.
+    print("  web UI: not here - run 'microguard dashboard' (this serves nginx)")
     try:
         server.serve_forever()
     except KeyboardInterrupt:

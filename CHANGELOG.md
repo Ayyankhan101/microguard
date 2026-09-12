@@ -46,6 +46,17 @@
   - `scoring.compute_combined_score()` — the single blend, shared by `scan`,
     `watch` and the live path.
   - Six Diataxis documents under `docs/` covering the live path.
+- **Light mode in the dashboard.** A three-state preference — system, light,
+  dark — resolved in `gui/src/theme.ts` and written to `<html>` as a concrete
+  `data-theme`, so the CSS carries two token blocks and no media query that
+  could fight an explicit choice. Defaults to the OS setting and tracks it live
+  while on "system"; an explicit choice persists and outranks it. The light
+  palette is the one `report.py` already uses for `@media print`, keeping the
+  dashboard and the printed report recognizably one product, with the semantic
+  colours darkened because `#f59e0b` amber measures 2.05:1 on the light card
+  and fails WCAG AA — every light token now measures at or above 4.5:1. Also
+  converted eleven `rgba()` literals in `index.css` into tokens; they were
+  keyed to white and would have been invisible on a light background.
 - **Web dashboard** — `microguard dashboard` serves a TypeScript SPA and its API
   on one port (default `127.0.0.1:8500`):
   - Live tab: decisions streamed over SSE, a score histogram, most-blocked IPs,
@@ -80,6 +91,12 @@
   on loopback.
 - `docs/howto-run-the-dashboard.md`, plus a Dashboard API section in
   `docs/reference-live-api.md`.
+- `docs/howto-operate-microguard.md` — running a deployment by hand: what runs
+  itself versus what needs you, telling the three failure modes apart (a dead
+  process is a 500 outage, not fail-open), what a restart costs versus what
+  flushing Redis costs, why a retrained model needs a restart, and Redis
+  housekeeping. Includes an optional systemd unit for anyone who later decides
+  they want supervision after all.
 - `tests/conftest.py` — shared `make_entry`/`make_session`/`nginx_log_file`
   fixtures, replacing three near-identical hand-rolled `_make_entry` copies
   across `test_features.py`, `test_labeler_rules.py`.
@@ -152,6 +169,28 @@ than a regression.
     `FileNotFoundError` from a bare `open()` inside `detect_format`, not the
     handler it was named for. It now passes an explicit format and matches the
     message.
+- **The check server answered a browser with a bare 404.** `microguard serve`
+  is the nginx `auth_request` backend, with one route and per-request logging
+  suppressed, so a healthy server looks dead: the terminal stays blank, the
+  prompt never returns, and opening `http://127.0.0.1:8400` in a browser
+  produced the stdlib 404 page with no explanation. It now answers any path
+  other than `/check` with plain text naming `/check`, pointing at
+  `microguard dashboard` for the UI, and giving a working `curl` line built
+  from the address actually bound rather than a hardcoded 8400. The status is
+  still exactly 404 — nginx turns anything outside 2xx/401/403 into a 500, so a
+  misconfigured `proxy_pass` must keep behaving as it did. The startup banner
+  gained a matching line.
+- **The blocked-IP set grew without bound.** `mg:v1:blocked_ips` held one entry
+  per distinct blocked address, `ZINCRBY`'d on every block and never trimmed or
+  expired — the only structure in the system that grew with the number of
+  distinct attackers rather than with traffic volume, so against a rotating
+  botnet it had no ceiling. The in-memory recorder's `Counter` had the same
+  defect. Both are now capped at `MAX_TRACKED_IPS` (1,000, a hundred times the
+  ten the dashboard displays). On the Redis side the trim rides the pipeline
+  that was already being sent, so recording is still one round trip. Trimming
+  keeps the highest counts, so a brand-new address can be evicted before it
+  surfaces in the top-ten display — the right trade for a structure that
+  answers "who is hitting hardest", and noted in both docstrings.
 - **Twelve `open()` calls in the package had no explicit encoding** — in
   `model.py`, `training/train.py`, `training/build_real_dataset.py` and
   `training/generate.py`. Without one, Python falls back to the OS locale

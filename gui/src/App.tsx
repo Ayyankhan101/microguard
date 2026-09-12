@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 
 import { getHealth } from './api/client';
+import { ThemeToggle } from './components/ThemeToggle';
 import { LiveTab } from './tabs/LiveTab';
 import { ModelTab } from './tabs/ModelTab';
 import { ScanTab } from './tabs/ScanTab';
@@ -47,6 +48,7 @@ export function App() {
             </button>
           ))}
         </div>
+        <ThemeToggle />
         <HealthStatus />
       </nav>
       <main className="main">

@@ -155,3 +155,50 @@ class TestRecent:
         payload["label"] = "bot"
 
         assert recorder.recent()[0]["label"] == "human"
+
+
+class TestBlockedIpBound:
+    """The blocked-IP set must not grow with the number of distinct attackers.
+
+    Every other structure here is bounded — the event ring is capped, session
+    keys expire, the counters are fixed fields. This one tracked one entry per
+    distinct blocked IP forever, which against a rotating botnet is a slow leak
+    with no ceiling.
+    """
+
+    def test_the_set_stops_growing_at_the_cap(self):
+        from microguard.events import MAX_TRACKED_IPS
+
+        recorder = InMemoryDecisionRecorder()
+
+        for i in range(MAX_TRACKED_IPS + 500):
+            recorder.record(decision(ip=f"10.0.{i // 256}.{i % 256}", label="bot"))
+
+        assert recorder.tracked_ip_count() <= MAX_TRACKED_IPS
+
+    def test_the_busiest_ips_survive_eviction(self):
+        """Trimming keeps the highest counts, because the only consumer asks
+        who is hitting hardest — not who has ever been blocked."""
+        from microguard.events import MAX_TRACKED_IPS
+
+        recorder = InMemoryDecisionRecorder()
+        for _ in range(50):
+            recorder.record(decision(ip="203.0.113.9", label="bot"))
+
+        for i in range(MAX_TRACKED_IPS + 500):
+            recorder.record(decision(ip=f"10.0.{i // 256}.{i % 256}", label="bot"))
+
+        top = recorder.stats()["top_blocked_ips"]
+        assert top[0] == {"ip": "203.0.113.9", "count": 50}
+
+    def test_counters_are_unaffected_by_trimming(self):
+        """Totals are cumulative and must not shrink when the set is trimmed."""
+        from microguard.events import MAX_TRACKED_IPS
+
+        recorder = InMemoryDecisionRecorder()
+        blocks = MAX_TRACKED_IPS + 200
+
+        for i in range(blocks):
+            recorder.record(decision(ip=f"10.0.{i // 256}.{i % 256}", label="bot"))
+
+        assert recorder.stats()["blocked"] == blocks

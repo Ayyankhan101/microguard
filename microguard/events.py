@@ -21,7 +21,22 @@ from typing import Protocol, runtime_checkable
 # and the model tab's distribution use.
 SCORE_BUCKETS = 20
 DEFAULT_CAPACITY = 1000
+
+# How many blocked IPs are displayed, and how many are tracked to produce them.
+#
+# The tracking set is bounded because it is the one structure here that would
+# otherwise grow with the number of DISTINCT attackers rather than with traffic
+# volume: the event ring is capped, session keys expire, and the counters are a
+# handful of fixed fields. Against a rotating botnet an untrimmed set has no
+# ceiling.
+#
+# Trimming keeps the highest counts, so once the set is full a brand-new
+# attacker at one block can be evicted before it ever surfaces. That is the
+# right trade for a structure whose only consumer is "top blocked IPs" — it
+# answers who is hitting hardest, not who has ever been blocked. For the
+# latter, read the decision feed.
 TOP_IPS = 10
+MAX_TRACKED_IPS = 1000
 
 
 def score_bucket(score: float) -> int:
@@ -79,6 +94,12 @@ class InMemoryDecisionRecorder:
             if result.get("label") == "bot":
                 self._blocked += 1
                 self._blocked_ips[result.get("ip", "")] += 1
+                if len(self._blocked_ips) > MAX_TRACKED_IPS:
+                    # Only on the crossing, not every block: most_common is
+                    # O(n log n) and this is the request path.
+                    self._blocked_ips = Counter(
+                        dict(self._blocked_ips.most_common(MAX_TRACKED_IPS))
+                    )
 
     def stats(self) -> dict:
         with self._lock:
@@ -101,3 +122,12 @@ class InMemoryDecisionRecorder:
         with self._lock:
             events = list(self._events)
         return [dict(event) for event in reversed(events[-limit:])]
+
+    def tracked_ip_count(self) -> int:
+        """How many distinct blocked IPs are currently tracked.
+
+        Not part of DecisionRecorder — this exists so the bound can be
+        asserted, and mirrors ZCARD on the Redis side.
+        """
+        with self._lock:
+            return len(self._blocked_ips)

@@ -17,6 +17,45 @@ def client():
     return TestClient(create_app())
 
 
+class _FakeConfig:
+    """An in-memory stand-in for RedisRuntimeConfig.
+
+    The real one needs redis-py, and these tests are about the HTTP surface --
+    validation, the write gate, and what a PUT leaves alone. Redis behavior is
+    covered against a real server in tests/live/test_runtime_config.py.
+    """
+
+    def __init__(self):
+        self._threshold = None
+        self._promoted = frozenset()
+
+    def block_threshold(self):
+        return self._threshold
+
+    def set_block_threshold(self, value):
+        self._threshold = value
+
+    def promoted_signals(self):
+        return self._promoted
+
+    def set_promoted_signals(self, sources):
+        from microguard.signals import KNOWN_SIGNAL_SOURCES
+
+        unknown = set(sources) - KNOWN_SIGNAL_SOURCES
+        if unknown:
+            raise ValueError(f"unknown signal source(s): {sorted(unknown)}")
+        self._promoted = frozenset(sources)
+
+
+@pytest.fixture
+def writable_client():
+    from microguard.dashboard.app import create_app
+
+    app = create_app(allow_config_writes=True)
+    app.state.runtime_config = _FakeConfig()
+    return TestClient(app)
+
+
 class TestHealth:
     def test_reports_version_and_model_status(self, client):
         response = client.get("/api/health")
@@ -524,3 +563,57 @@ class TestSignalHealth:
         assert health["resolved"] == 4
         assert 29 <= health["age_seconds"] <= 40
         assert health["sources"][0]["name"] == "tor"
+
+
+class TestSignalPromotionEndpoint:
+    """Promotion is the moment a signal stops being a measurement.
+
+    Without a way to set it, decision 10A's observe-only posture is permanent
+    and every signal built in M1 and M2 can never decide anything.
+    """
+
+    def test_reading_reports_the_known_sources(self, client):
+        body = client.get("/api/live/config").json()
+        assert set(body["known_signals"]) == {"tor", "hosting", "abuseipdb", "fingerprint"}
+        assert body["promoted_signals"] == []
+
+    def test_writing_is_refused_without_the_flag(self, client):
+        response = client.put(
+            "/api/live/config", json={"block_threshold": 0.9, "promoted_signals": ["tor"]}
+        )
+        assert response.status_code == 403
+
+    def test_an_unknown_source_is_rejected_with_the_known_list(self, writable_client):
+        """A typo must fail loudly. Accepting 'torr' silently would leave the
+        operator believing a signal is enforced while it quietly is not."""
+        response = writable_client.put(
+            "/api/live/config", json={"block_threshold": 0.9, "promoted_signals": ["torr"]}
+        )
+        assert response.status_code == 400
+        assert "torr" in response.json()["detail"]
+
+    def test_a_promotion_round_trips(self, writable_client):
+        writable_client.put(
+            "/api/live/config",
+            json={"block_threshold": 0.9, "promoted_signals": ["tor", "fingerprint"]},
+        )
+        body = writable_client.get("/api/live/config").json()
+        assert body["promoted_signals"] == ["fingerprint", "tor"]
+
+    def test_an_empty_list_returns_everything_to_observe_only(self, writable_client):
+        writable_client.put(
+            "/api/live/config", json={"block_threshold": 0.9, "promoted_signals": ["tor"]}
+        )
+        writable_client.put(
+            "/api/live/config", json={"block_threshold": 0.9, "promoted_signals": []}
+        )
+        assert writable_client.get("/api/live/config").json()["promoted_signals"] == []
+
+    def test_omitting_the_field_leaves_promotion_alone(self, writable_client):
+        """A threshold change must not silently un-promote a signal."""
+        writable_client.put(
+            "/api/live/config", json={"block_threshold": 0.9, "promoted_signals": ["tor"]}
+        )
+        writable_client.put("/api/live/config", json={"block_threshold": 0.7})
+
+        assert writable_client.get("/api/live/config").json()["promoted_signals"] == ["tor"]

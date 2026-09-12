@@ -17,6 +17,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+# Every source a deployment can promote out of observe-only. Closed on purpose:
+# a typo would leave an operator believing a signal is enforced while it quietly
+# is not, which is worse than the signal being off.
+#
+# Lives here rather than in live/runtime_config.py because the dashboard reads
+# it to render its promotion control, and the dashboard must run without
+# redis-py -- live/__init__.py raises ImportError without it.
+KNOWN_SIGNAL_SOURCES = frozenset({"tor", "hosting", "abuseipdb", "fingerprint"})
+
 
 @dataclass(frozen=True)
 class Signals:

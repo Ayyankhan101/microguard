@@ -110,3 +110,20 @@ class TestImportIsolation:
             [sys.executable, "-c", code], capture_output=True, check=False
         )
         assert result.returncode == 0, "importing microguard.labeler pulled in redis"
+
+    def test_importing_the_dashboard_api_does_not_pull_in_redis(self):
+        """The dashboard has to run on a base install.
+
+        This nearly regressed: the promotion control needs KNOWN_SIGNAL_SOURCES
+        to render, and importing it from live/runtime_config.py would have
+        dragged the whole live package -- and its redis guard -- behind the
+        dashboard's scan and model tabs.
+        """
+        code = (
+            "import microguard.dashboard.api_live, sys; "
+            "sys.exit(1 if 'redis' in sys.modules else 0)"
+        )
+        result = subprocess.run(
+            [sys.executable, "-c", code], capture_output=True, check=False
+        )
+        assert result.returncode == 0, "importing the dashboard API pulled in redis"

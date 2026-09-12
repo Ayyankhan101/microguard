@@ -259,6 +259,9 @@ def run_server(
         block_threshold=block_threshold,
         recorder=recorder,
         threshold_source=config.block_threshold,
+        # Without this, decision 10A's observe-only posture is permanent:
+        # every signal is measured and none can ever decide anything.
+        promoted_source=config.promoted_signals,
     )
 
     CheckHandler.scorer = scorer

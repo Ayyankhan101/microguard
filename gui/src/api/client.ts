@@ -109,3 +109,21 @@ export const setBlockThreshold = (blockThreshold: number | null) =>
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ block_threshold: blockThreshold }),
   });
+
+/**
+ * Promotion is absolute, not a delta: this sends the full list every time, and
+ * an empty array returns every signal to observe-only. `block_threshold` rides
+ * along unchanged so a promotion never silently clears the override.
+ */
+export const setPromotedSignals = (
+  promoted: string[],
+  blockThreshold: number | null,
+) =>
+  request('/api/live/config', LiveConfigSchema, {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      block_threshold: blockThreshold,
+      promoted_signals: promoted,
+    }),
+  });

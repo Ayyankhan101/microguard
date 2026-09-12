@@ -64,6 +64,7 @@ class MicroguardASGI:
         self._trust_xff = trust_forwarded_for
         self._r = redis.Redis.from_url(redis_url, decode_responses=True)
         self._store = RedisSessionStateStore(self._r, default_ttl=session_ttl)
+        _config = RedisRuntimeConfig(self._r)
         self._scorer = LiveScorer(
             self._store,
             block_threshold=block_threshold,
@@ -72,7 +73,10 @@ class MicroguardASGI:
             # deployment shows up in `microguard dashboard` too — and honors a
             # threshold moved from it without a restart.
             recorder=RedisDecisionRecorder(self._r),
-            threshold_source=RedisRuntimeConfig(self._r).block_threshold,
+            threshold_source=_config.block_threshold,
+            # Without this, decision 10A's observe-only posture is
+            # permanent: every signal is measured and none can decide.
+            promoted_source=_config.promoted_signals,
         )
 
     async def __call__(self, scope: dict, receive: Any, send: Any) -> None:
@@ -210,6 +214,7 @@ class MicroguardWSGI:
         self._trust_xff = trust_forwarded_for
         self._r = redis.Redis.from_url(redis_url, decode_responses=True)
         self._store = RedisSessionStateStore(self._r, default_ttl=session_ttl)
+        _config = RedisRuntimeConfig(self._r)
         self._scorer = LiveScorer(
             self._store,
             block_threshold=block_threshold,
@@ -218,7 +223,10 @@ class MicroguardWSGI:
             # deployment shows up in `microguard dashboard` too — and honors a
             # threshold moved from it without a restart.
             recorder=RedisDecisionRecorder(self._r),
-            threshold_source=RedisRuntimeConfig(self._r).block_threshold,
+            threshold_source=_config.block_threshold,
+            # Without this, decision 10A's observe-only posture is
+            # permanent: every signal is measured and none can decide.
+            promoted_source=_config.promoted_signals,
         )
 
     def __call__(self, environ: dict, start_response: Any) -> Any:

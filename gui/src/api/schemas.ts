@@ -162,8 +162,16 @@ export const LiveStatsSchema = z.object({
 });
 export type LiveStats = z.infer<typeof LiveStatsSchema>;
 
+/**
+ * `promoted_signals` is the list of sources allowed to decide a verdict. A
+ * signal that is resolved but not promoted is recorded on every decision and
+ * changes none of them — that is how a new signal gets measured against real
+ * traffic before it starts blocking anyone.
+ */
 export const LiveConfigSchema = z.object({
   block_threshold: z.number().nullable(),
+  promoted_signals: z.array(z.string()),
+  known_signals: z.array(z.string()),
   writable: z.boolean(),
 });
 export type LiveConfig = z.infer<typeof LiveConfigSchema>;

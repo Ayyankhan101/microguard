@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 
 from ..events import DecisionRecorder
+from ..signals import KNOWN_SIGNAL_SOURCES
 
 logger = logging.getLogger(__name__)
 
@@ -80,11 +81,17 @@ async def stream(request: Request) -> EventSourceResponse:
 
 
 class ConfigUpdate(BaseModel):
-    """A change to the live block threshold. None clears the override."""
+    """A change to live blocking configuration.
+
+    Both fields are absolute, not deltas: `block_threshold: null` clears the
+    override, and `promoted_signals: []` returns every signal to observe-only.
+    A PUT that omits a field leaves it alone.
+    """
 
     model_config = {"extra": "forbid"}
 
     block_threshold: float | None = Field(default=None, ge=0.0, le=1.0)
+    promoted_signals: list[str] | None = Field(default=None)
 
 
 @router.get("/config")
@@ -93,6 +100,10 @@ def read_config(request: Request) -> dict:
     config = request.app.state.runtime_config
     return {
         "block_threshold": config.block_threshold() if config is not None else None,
+        "promoted_signals": (
+            sorted(config.promoted_signals()) if config is not None else []
+        ),
+        "known_signals": sorted(KNOWN_SIGNAL_SOURCES),
         "writable": bool(request.app.state.allow_config_writes and config is not None),
     }
 
@@ -125,4 +136,22 @@ def write_config(request: Request, update: ConfigUpdate) -> dict:
     logger.warning(
         "live block_threshold changed: %s -> %s", previous, update.block_threshold
     )
-    return {"block_threshold": update.block_threshold, "writable": True}
+
+    if update.promoted_signals is not None:
+        try:
+            config.set_promoted_signals(set(update.promoted_signals))
+        except ValueError as exc:
+            # A typo must fail here rather than leaving the operator believing
+            # a signal is enforced while it quietly is not.
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        # Promotion is the moment a signal stops being a measurement and starts
+        # blocking real visitors. It belongs in the log at the same volume as
+        # a threshold change.
+        logger.warning("promoted signals changed to: %s", sorted(update.promoted_signals))
+
+    return {
+        "block_threshold": update.block_threshold,
+        "promoted_signals": sorted(config.promoted_signals()),
+        "known_signals": sorted(KNOWN_SIGNAL_SOURCES),
+        "writable": True,
+    }

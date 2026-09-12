@@ -1,7 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
-import { getLiveConfig, getLiveEvents, getLiveStats, setBlockThreshold } from '../api/client';
+import {
+  getLiveConfig,
+  getLiveEvents,
+  getLiveStats,
+  setBlockThreshold,
+  setPromotedSignals,
+} from '../api/client';
+import { SignalPromotion } from '../components/SignalPromotion';
 import { DecisionSchema, LiveStatsSchema, type Decision, type LiveStats } from '../api/schemas';
 import { Histogram } from '../components/Histogram';
 import { LabelBadge, RiskBadge } from '../components/Badges';
@@ -66,6 +73,12 @@ export function LiveTab() {
   const queryClient = useQueryClient();
 
   const config = useQuery({ queryKey: ['live-config'], queryFn: getLiveConfig });
+  const savePromotion = useMutation({
+    mutationFn: (next: string[]) =>
+      setPromotedSignals(next, config.data?.block_threshold ?? null),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['live-config'] }),
+  });
+
   const saveThreshold = useMutation({
     mutationFn: setBlockThreshold,
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['live-config'] }),
@@ -135,6 +148,14 @@ export function LiveTab() {
             saving={saveThreshold.isPending}
             error={saveThreshold.error?.message ?? null}
             onSave={(value) => saveThreshold.mutate(value)}
+          />
+          <SignalPromotion
+            known={config.data?.known_signals ?? []}
+            promoted={config.data?.promoted_signals ?? []}
+            writable={config.data?.writable ?? false}
+            saving={savePromotion.isPending}
+            error={savePromotion.error?.message ?? null}
+            onToggle={(next) => savePromotion.mutate(next)}
           />
         </div>
       </div>

@@ -90,3 +90,65 @@ def test_a_redis_outage_reads_as_none_so_the_configured_threshold_stands(config)
 def test_out_of_range_thresholds_are_rejected_on_write(config):
     with pytest.raises(ValueError):
         config.set_block_threshold(1.5)
+
+
+class TestPromotedSignals:
+    """Decision 10A needs a way to actually promote something.
+
+    Without this the observe-only posture is permanent: every signal is
+    measured, recorded, and can never decide anything. A feature that cannot be
+    turned on is a feature that does not exist.
+    """
+
+    def test_nothing_is_promoted_by_default(self, config):
+        assert config.promoted_signals() == frozenset()
+
+    def test_a_promoted_source_is_returned(self, config):
+        config.set_promoted_signals({"tor"})
+        assert config.promoted_signals() == frozenset({"tor"})
+
+    def test_several_sources_round_trip(self, config):
+        config.set_promoted_signals({"tor", "abuseipdb", "fingerprint"})
+        assert config.promoted_signals() == frozenset({"tor", "abuseipdb", "fingerprint"})
+
+    def test_clearing_returns_to_observe_only(self, config):
+        config.set_promoted_signals({"tor"})
+        config.set_promoted_signals(set())
+        assert config.promoted_signals() == frozenset()
+
+    def test_an_unknown_source_is_refused(self, config):
+        """A typo must fail loudly at the point of setting it. Accepting
+        'torr' silently would leave an operator believing a signal is enforced
+        while it quietly is not."""
+        with pytest.raises(ValueError, match="unknown signal source"):
+            config.set_promoted_signals({"torr"})
+
+    def test_an_unreadable_value_promotes_nothing(self, config, redis_client):
+        """Fail safe in the direction that does not surprise anyone: a broken
+        config must not start enforcing a signal nobody approved."""
+        redis_client.hset("mg:v1:config", "promoted_signals", "[not json")
+        assert config.promoted_signals() == frozenset()
+
+    def test_a_value_of_the_wrong_type_promotes_nothing(self, config, redis_client):
+        redis_client.hset("mg:v1:config", "promoted_signals", '{"tor": true}')
+        assert config.promoted_signals() == frozenset()
+
+    def test_an_unreachable_store_promotes_nothing(self, config, monkeypatch):
+        def boom():
+            raise redis.RedisError("gone")
+
+        monkeypatch.setattr(config, "_r", type("C", (), {"pipeline": lambda s: boom()})())
+        config._promoted_at = 0.0
+        assert config.promoted_signals() == frozenset()
+
+    def test_the_value_is_cached_like_the_threshold(self, redis_client):
+        """Read once per request on the path nginx waits on, so it is cached
+        for the same few seconds the threshold is. The shared `config` fixture
+        disables caching, so this builds its own."""
+        redis_client.flushdb()
+        cached = RedisRuntimeConfig(redis_client, cache_seconds=30.0)
+        cached.set_promoted_signals({"tor"})
+
+        redis_client.hset("mg:v1:config", "promoted_signals", '["abuseipdb"]')
+
+        assert cached.promoted_signals() == frozenset({"tor"})

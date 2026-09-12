@@ -7,7 +7,8 @@ the dashboard can move it and the running scorer picks it up.
 
     Key schema
 
-        mg:v1:config   HASH  block_threshold -> float (absent = no override)
+        mg:v1:config   HASH  block_threshold   -> float (absent = no override)
+                             promoted_signals -> JSON array of source names
 
 The value is cached in-process for a few seconds. The scorer reads it once per
 request, and the check server handles every request to the protected site; an
@@ -17,10 +18,13 @@ changes a few times a day.
 
 from __future__ import annotations
 
+import json
 import logging
 import time
 
 import redis
+
+from ..signals import KNOWN_SIGNAL_SOURCES
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +32,7 @@ RedisClient = redis.Redis  # type: ignore[type-arg]
 
 CONFIG_KEY = "mg:v1:config"
 BLOCK_THRESHOLD_FIELD = "block_threshold"
+PROMOTED_SIGNALS_FIELD = "promoted_signals"
 DEFAULT_CACHE_SECONDS = 5.0
 
 
@@ -43,6 +48,8 @@ class RedisRuntimeConfig:
         self._cache_seconds = cache_seconds
         self._cached: float | None = None
         self._cached_at = 0.0
+        self._promoted: frozenset[str] = frozenset()
+        self._promoted_at = 0.0
 
     def block_threshold(self) -> float | None:
         """The override, or None to use whatever the process was started with.
@@ -81,6 +88,58 @@ class RedisRuntimeConfig:
         self._cached = value
         self._cached_at = now
         return value
+
+    def promoted_signals(self) -> frozenset[str]:
+        """Sources allowed to decide a verdict, or an empty set.
+
+        Every failure path returns the empty set. A config store that is down
+        or holds something unreadable must leave every signal observe-only --
+        failing towards "enforce nothing nobody approved" is the direction that
+        cannot surprise anyone.
+        """
+        now = time.monotonic()
+        if self._promoted_at and now - self._promoted_at < self._cache_seconds:
+            return self._promoted
+
+        try:
+            pipe = self._r.pipeline()
+            pipe.hget(CONFIG_KEY, PROMOTED_SIGNALS_FIELD)
+            (raw,) = pipe.execute()
+        except redis.RedisError:
+            logger.warning("runtime config unreachable, treating every signal as observe-only")
+            return frozenset()
+
+        value: frozenset[str] = frozenset()
+        if raw is not None:
+            try:
+                parsed = json.loads(raw)
+            except (TypeError, ValueError, json.JSONDecodeError):
+                logger.warning("runtime config holds an unreadable promoted_signals (%r)", raw)
+                parsed = None
+            if isinstance(parsed, list):
+                value = frozenset(str(item) for item in parsed) & KNOWN_SIGNAL_SOURCES
+            elif parsed is not None:
+                logger.warning("promoted_signals must be a JSON array, got %r", raw)
+
+        self._promoted = value
+        self._promoted_at = now
+        return value
+
+    def set_promoted_signals(self, sources: set[str] | frozenset[str]) -> None:
+        """Promote these sources out of observe-only. An empty set clears it."""
+        unknown = set(sources) - KNOWN_SIGNAL_SOURCES
+        if unknown:
+            raise ValueError(
+                f"unknown signal source(s): {sorted(unknown)}. "
+                f"Known: {sorted(KNOWN_SIGNAL_SOURCES)}"
+            )
+
+        if not sources:
+            self._r.hdel(CONFIG_KEY, PROMOTED_SIGNALS_FIELD)
+        else:
+            self._r.hset(CONFIG_KEY, PROMOTED_SIGNALS_FIELD, json.dumps(sorted(sources)))
+        self._promoted = frozenset(sources)
+        self._promoted_at = time.monotonic()
 
     def set_block_threshold(self, value: float | None) -> None:
         """Set the override, or clear it with None."""

@@ -1,4 +1,11 @@
 {
   "block_threshold": null,
+  "promoted_signals": [],
+  "known_signals": [
+    "abuseipdb",
+    "fingerprint",
+    "hosting",
+    "tor"
+  ],
   "writable": false
 }

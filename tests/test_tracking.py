@@ -157,3 +157,105 @@ class TestPyFunc:
             from microguard.tracking import load_model
             load_model(version=1)
             mock_mlflow.pyfunc.load_model.assert_called_once_with("models:/microguard/1")
+
+
+class TestTheThinWrappers:
+    """Every one of these is a delegation to mlflow.
+
+    They were uncovered because the matrix job does not install the mlflow
+    extra -- but the delegation itself is testable without it, by mocking
+    `_get_mlflow`. Covering them here gates the code on every runner instead
+    of adding a ~100MB dependency to twelve jobs to reach the same place.
+    """
+
+    def _mlflow(self, monkeypatch):
+        import microguard.tracking as t
+
+        fake = MagicMock()
+        monkeypatch.setattr(t, "_get_mlflow", lambda: fake)
+        return t, fake
+
+    def test_start_run_delegates(self, monkeypatch):
+        t, fake = self._mlflow(monkeypatch)
+        t.start_run(run_name="r1")
+        fake.start_run.assert_called_once_with(run_name="r1")
+
+    def test_log_params_delegates(self, monkeypatch):
+        t, fake = self._mlflow(monkeypatch)
+        t.log_params({"epochs": 100})
+        fake.log_params.assert_called_once_with({"epochs": 100})
+
+    def test_log_metrics_delegates_with_the_step(self, monkeypatch):
+        t, fake = self._mlflow(monkeypatch)
+        t.log_metrics({"accuracy": 0.9}, step=3)
+        fake.log_metrics.assert_called_once_with({"accuracy": 0.9}, step=3)
+
+    def test_log_artifact_delegates(self, monkeypatch):
+        t, fake = self._mlflow(monkeypatch)
+        t.log_artifact("/tmp/model.json", artifact_path="model")
+        fake.log_artifact.assert_called_once_with("/tmp/model.json", artifact_path="model")
+
+    def test_register_model_builds_the_runs_uri(self, monkeypatch):
+        t, fake = self._mlflow(monkeypatch)
+        t.register_model("abc123", artifact_path="model")
+        fake.register_model.assert_called_once_with("runs:/abc123/model", t.MODEL_NAME)
+
+    def test_init_sets_the_uri_and_experiment(self, monkeypatch):
+        t, fake = self._mlflow(monkeypatch)
+        monkeypatch.setenv("MICROGUARD_MLFLOW_TRACKING_URI", "file:./mlruns")
+        t.init()
+        fake.set_tracking_uri.assert_called_once_with("file:./mlruns")
+        fake.set_experiment.assert_called_once_with(t.EXPERIMENT_NAME)
+
+
+class TestLoadModelSelectors:
+    def test_a_stage_loads_that_stage(self, monkeypatch):
+        import microguard.tracking as t
+
+        fake = MagicMock()
+        monkeypatch.setattr(t, "_get_mlflow", lambda: fake)
+        t.load_model(stage="Staging")
+        fake.pyfunc.load_model.assert_called_once_with(f"models:/{t.MODEL_NAME}/Staging")
+
+    def test_neither_falls_back_to_production(self, monkeypatch):
+        import microguard.tracking as t
+
+        fake = MagicMock()
+        monkeypatch.setattr(t, "_get_mlflow", lambda: fake)
+        t.load_model()
+        fake.pyfunc.load_model.assert_called_once_with(f"models:/{t.MODEL_NAME}/Production")
+
+
+class TestGetRuns:
+    def test_an_absent_experiment_is_empty_not_an_error(self, monkeypatch):
+        """A fresh workspace has no experiment yet. That is not a failure."""
+        import microguard.tracking as t
+
+        fake = MagicMock()
+        fake.tracking.MlflowClient.return_value.get_experiment_by_name.return_value = None
+        monkeypatch.setattr(t, "_get_mlflow", lambda: fake)
+
+        assert t.get_runs() == []
+
+    def test_runs_are_formatted(self, monkeypatch):
+        import microguard.tracking as t
+
+        run = MagicMock()
+        run.info.run_id = "r1"
+        run.info.status = "FINISHED"
+        run.info.start_time = 1700000000000
+        run.info.end_time = 1700000060000
+        run.data.params = {}
+        run.data.metrics = {"accuracy": 0.9}
+        run.data.tags = {"mlflow.runName": "train-1"}
+
+        fake = MagicMock()
+        client = fake.tracking.MlflowClient.return_value
+        client.get_experiment_by_name.return_value = MagicMock(experiment_id="e1")
+        client.search_runs.return_value = [run]
+        monkeypatch.setattr(t, "_get_mlflow", lambda: fake)
+
+        runs = t.get_runs(limit=5)
+
+        assert [r["run_id"] for r in runs] == ["r1"]
+        assert runs[0]["run_name"] == "train-1"

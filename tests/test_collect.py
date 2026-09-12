@@ -154,19 +154,33 @@ class TestAWriteFailureNeverReachesTheVisitor:
     collection write, and the cost of surfacing it is someone's page load.
     """
 
-    def test_an_unwritable_path_is_logged_and_swallowed(self, tmp_path, caplog):
+    def test_a_failed_write_is_logged_and_swallowed(self, tmp_path, caplog, monkeypatch):
+        """Injected rather than provoked with chmod.
+
+        The first version made the directory 0o500 and expected OSError.
+        That is POSIX semantics: on Windows chmod does not remove write
+        permission on a directory, so no error was raised, nothing was
+        logged, and all four Windows matrix jobs failed on an empty caplog
+        while every other platform passed. The contract under test -- an
+        OSError during the write is logged, not raised -- is the same
+        everywhere, so inject the OSError instead of asking the filesystem
+        to produce one.
+        """
         import logging
 
         path = tmp_path / "collected.jsonl"
         collector = DecisionCollector(path)
-        path.parent.chmod(0o500)  # readable + executable, not writable
-        try:
-            with caplog.at_level(logging.WARNING, logger="microguard.collect"):
-                collector.record(_decision())  # must not raise
-        finally:
-            path.parent.chmod(0o700)
 
-        assert "collect" in caplog.text.lower() or "record" in caplog.text.lower()
+        def boom(*args, **kwargs):
+            raise OSError("disk full")
+
+        monkeypatch.setattr(Path, "open", boom)
+
+        with caplog.at_level(logging.WARNING, logger="microguard.collect"):
+            written = collector.record(_decision())  # must not raise
+
+        assert written is False
+        assert "could not record" in caplog.text
 
     def test_an_unserializable_row_does_not_raise(self, tmp_path):
         path = tmp_path / "collected.jsonl"

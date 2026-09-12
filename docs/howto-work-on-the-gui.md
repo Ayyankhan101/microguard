@@ -126,6 +126,20 @@ internet, and a font that fails to load is worse than one never requested. The
 monospace face carries the personality instead — every value here is machine
 output.
 
+**Both themes, always.** `src/theme.ts` resolves a three-state preference
+(`system | light | dark`) and writes a concrete `data-theme` onto `<html>`, so
+CSS needs two token blocks and no media query. Anything you add must read from
+the tokens — a literal colour or an `rgba()` overlay keyed to white will look
+correct in dark and wrong in light. The four overlay tokens (`--overlay`,
+`--overlay-strong`, `--row-border`, `--selected`) exist because the original
+CSS had exactly that problem.
+
+The light palette is the one `report.py` already uses for `@media print`, with
+the semantic colours darkened: `#f59e0b` amber measures 2.05:1 on the light
+card surface and fails WCAG AA outright, and those are badge labels people
+read. Every light token is at or above 4.5:1 — check any new one before adding
+it.
+
 Grid splits that must collapse on a narrow screen use the `.split-2` /
 `.split-3` classes rather than inline `gridTemplateColumns`, because inline
 styles cannot carry a media query.

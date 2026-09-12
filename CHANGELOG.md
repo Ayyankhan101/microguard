@@ -46,6 +46,17 @@
   - `scoring.compute_combined_score()` — the single blend, shared by `scan`,
     `watch` and the live path.
   - Six Diataxis documents under `docs/` covering the live path.
+- **Light mode in the dashboard.** A three-state preference — system, light,
+  dark — resolved in `gui/src/theme.ts` and written to `<html>` as a concrete
+  `data-theme`, so the CSS carries two token blocks and no media query that
+  could fight an explicit choice. Defaults to the OS setting and tracks it live
+  while on "system"; an explicit choice persists and outranks it. The light
+  palette is the one `report.py` already uses for `@media print`, keeping the
+  dashboard and the printed report recognizably one product, with the semantic
+  colours darkened because `#f59e0b` amber measures 2.05:1 on the light card
+  and fails WCAG AA — every light token now measures at or above 4.5:1. Also
+  converted eleven `rgba()` literals in `index.css` into tokens; they were
+  keyed to white and would have been invisible on a light background.
 - **Web dashboard** — `microguard dashboard` serves a TypeScript SPA and its API
   on one port (default `127.0.0.1:8500`):
   - Live tab: decisions streamed over SSE, a score histogram, most-blocked IPs,

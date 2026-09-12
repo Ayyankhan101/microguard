@@ -11,6 +11,12 @@
  */
 
 :root {
+  /* Dark is the default: it is what the generated HTML report looks like, and
+     what this dashboard shipped as. theme.ts always writes an explicit
+     data-theme onto <html>, so the light block below is a straight override
+     rather than a media query that has to be kept from fighting a choice. */
+  color-scheme: dark;
+
   --bg: #0f172a;
   --card: #1e293b;
   --card-border: #334155;
@@ -31,8 +37,62 @@
   --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
   --ui: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
 
+  /* Surfaces that sit on top of --bg. These were rgba() literals keyed to
+     white, which is invisible on a light background — they are tokens so they
+     can invert. */
+  --overlay: rgba(255, 255, 255, 0.02);
+  --overlay-strong: rgba(255, 255, 255, 0.03);
+  --row-border: rgba(51, 65, 85, 0.5);
+  --selected: rgba(59, 130, 246, 0.1);
+  --flash: rgba(226, 232, 240, 0.12);
+
+  --ruler-track: linear-gradient(
+    90deg,
+    rgba(16, 185, 129, 0.16) 0%,
+    rgba(59, 130, 246, 0.16) 30%,
+    rgba(245, 158, 11, 0.16) 60%,
+    rgba(239, 68, 68, 0.22) 100%
+  );
+
   --radius: 8px;
   --gap: 16px;
+}
+
+/* Light. The palette is the one report.py already uses for @media print, so a
+   printed report and a light dashboard are recognizably the same product.
+
+   The semantic colours are darkened rather than reused: #f59e0b amber and
+   #10b981 green are legible on near-black and fail badly on white, and these
+   are badge and label text people have to read. */
+:root[data-theme='light'] {
+  color-scheme: light;
+
+  --bg: #ffffff;
+  --card: #f8fafc;
+  --card-border: #e2e8f0;
+  --text: #1e293b;
+  --text-muted: #64748b;
+  --green: #047857;
+  --yellow: #b45309;
+  --red: #dc2626;
+  --blue: #2563eb;
+  --purple: #7c3aed;
+  --gray: #64748b;
+
+  --overlay: rgba(15, 23, 42, 0.03);
+  --overlay-strong: rgba(15, 23, 42, 0.05);
+  --row-border: rgba(148, 163, 184, 0.4);
+  --selected: rgba(37, 99, 235, 0.1);
+  --flash: rgba(37, 99, 235, 0.14);
+
+  /* Stronger tint: the same alphas wash out entirely on white. */
+  --ruler-track: linear-gradient(
+    90deg,
+    rgba(4, 120, 87, 0.18) 0%,
+    rgba(37, 99, 235, 0.18) 30%,
+    rgba(180, 83, 9, 0.2) 60%,
+    rgba(220, 38, 38, 0.26) 100%
+  );
 }
 
 * {
@@ -138,11 +198,34 @@ button {
 .rail__tab[aria-current='page'] {
   color: var(--text);
   border-left-color: var(--green);
-  background: rgba(255, 255, 255, 0.03);
+  background: var(--overlay-strong);
+}
+
+.theme-toggle {
+  /* Takes the rail's spare space so it and the status block sit together at
+     the bottom; .rail__status used to claim it. */
+  margin: auto 20px 0;
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  background: none;
+  border: 1px solid var(--card-border);
+  border-radius: 999px;
+  padding: 4px 11px;
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+}
+
+.theme-toggle:hover {
+  color: var(--text);
+  border-color: var(--text-muted);
 }
 
 .rail__status {
-  margin-top: auto;
+  margin-top: 10px;
   padding: 0 20px;
   display: flex;
   flex-direction: column;
@@ -283,13 +366,7 @@ button {
   height: var(--ruler-height);
   border: 1px solid var(--card-border);
   border-radius: 4px;
-  background: linear-gradient(
-    90deg,
-    rgba(16, 185, 129, 0.16) 0%,
-    rgba(59, 130, 246, 0.16) 30%,
-    rgba(245, 158, 11, 0.16) 60%,
-    rgba(239, 68, 68, 0.22) 100%
-  );
+  background: var(--ruler-track);
 }
 
 .ruler--compact {
@@ -434,16 +511,16 @@ th button {
 
 td {
   padding: 8px 10px;
-  border-bottom: 1px solid rgba(51, 65, 85, 0.5);
+  border-bottom: 1px solid var(--row-border);
   vertical-align: top;
 }
 
 tbody tr:hover {
-  background: rgba(255, 255, 255, 0.02);
+  background: var(--overlay);
 }
 
 tbody tr[aria-selected='true'] {
-  background: rgba(59, 130, 246, 0.1);
+  background: var(--selected);
 }
 
 .truncate {
@@ -470,7 +547,7 @@ tbody tr[aria-selected='true'] {
   align-items: baseline;
   padding: 8px 10px;
   border-left: 3px solid var(--card-border);
-  background: rgba(255, 255, 255, 0.02);
+  background: var(--overlay);
   border-radius: 0 4px 4px 0;
   font-family: var(--mono);
   font-size: 12px;
@@ -495,10 +572,10 @@ tbody tr[aria-selected='true'] {
 
 @keyframes arrive {
   from {
-    background: rgba(226, 232, 240, 0.12);
+    background: var(--flash);
   }
   to {
-    background: rgba(255, 255, 255, 0.02);
+    background: var(--overlay);
   }
 }
 
@@ -651,7 +728,30 @@ input[type='range'] {
     border-bottom-color: var(--green);
   }
 
-  .rail__status {
+  .theme-toggle {
+  /* Takes the rail's spare space so it and the status block sit together at
+     the bottom; .rail__status used to claim it. */
+  margin: auto 20px 0;
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  background: none;
+  border: 1px solid var(--card-border);
+  border-radius: 999px;
+  padding: 4px 11px;
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+}
+
+.theme-toggle:hover {
+  color: var(--text);
+  border-color: var(--text-muted);
+}
+
+.rail__status {
     margin-top: 0;
   }
 

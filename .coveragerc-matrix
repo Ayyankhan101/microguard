@@ -10,26 +10,23 @@
 # Redis service container. Between the two jobs, every line is still covered by
 # a gate. Local runs use pyproject.toml and measure everything.
 #
-# The MLflow files are the same situation with one honest difference. This job
-# installs .[live,fastapi,flask,dashboard] and NOT the mlflow extra, so every
-# function in tracking.py but resolved_tracking_uri() -- and all of
-# api_mlflow.py -- raises ImportError before doing anything. Measuring them
-# here gated nothing and cost 35 missed statements: the total read 97.74%,
-# which only passed --cov-fail-under=98 because coverage.py rounds to the
-# display precision before comparing. Eight more uncovered statements anywhere
-# would have turned it red, with the real cause three files away.
+# The MLflow surface used to be omitted here too, and that was a real gap: it
+# was not gated anywhere, because no job installs the mlflow extra. Fixed by
+# covering it instead of hiding it -- the wrappers in tracking.py and the
+# route in api_mlflow.py are thin delegations, testable with a mocked
+# _get_mlflow on any runner. Un-omitting them RAISED this number (98.71% ->
+# 99.08%) while making them gated, so there is no tradeoff to weigh.
 #
-# UNLIKE microguard/live, there is NO second job that installs the mlflow extra,
-# so these two files are currently UNGATED rather than gated elsewhere. That is
-# a known gap, not an oversight: closing it means adding `mlflow` to one job's
-# install line. Until then, do not read this omit as "covered somewhere else".
+# What genuinely cannot run here is ~30 statements that need mlflow or numpy
+# actually imported: tracking.py's `import mlflow`, BotDetectorPyFunc's
+# load_context, and train.py's MLflow run block. Adding a ~100MB dependency
+# to twelve matrix jobs to reach those is not worth it; they are exercised by
+# hand when the Databricks connection is used.
 [run]
 source = microguard
 omit =
     microguard/vulture_whitelist.py
     microguard/live/*
-    microguard/tracking.py
-    microguard/dashboard/api_mlflow.py
 
 [report]
 exclude_lines =

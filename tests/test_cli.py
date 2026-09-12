@@ -917,3 +917,90 @@ class TestRetrainCommand:
             "min_examples": 7,
             "epochs": 3,
         }
+
+
+class TestScanModelSourceRegistry:
+    """`scan --model-source registry` loads from the Databricks Registry.
+
+    Every failure falls back to the local model and says so. A scan must not
+    depend on a reachable tracking backend, and without credentials the
+    Registry is unreachable by default (it resolves to "databricks").
+    """
+
+    def _run(self, monkeypatch, argv):
+        monkeypatch.setattr(sys, 'argv', ['microguard'] + argv)
+        with pytest.raises(SystemExit) as exc:
+            cli_module.main()
+        return exc.value.code
+
+    def test_an_unreachable_registry_falls_back_and_says_so(
+        self, monkeypatch, nginx_log_file, capsys
+    ):
+        from microguard import tracking
+
+        def boom(*args, **kwargs):
+            raise RuntimeError("no credentials")
+
+        monkeypatch.setattr(tracking, 'load_model', boom)
+        path = nginx_log_file(_bot_session_lines())
+
+        self._run(monkeypatch, ['scan', path, '--model-source', 'registry', '--no-mlflow'])
+
+        err = capsys.readouterr().err
+        assert 'Registry load failed' in err
+        assert 'no credentials' in err
+        assert 'falling back to local model' in err
+
+    def test_mlflow_missing_falls_back_and_says_so(
+        self, monkeypatch, nginx_log_file, capsys
+    ):
+        from microguard import tracking
+
+        def not_installed(*args, **kwargs):
+            raise ImportError("No module named 'mlflow'")
+
+        monkeypatch.setattr(tracking, 'load_model', not_installed)
+        path = nginx_log_file(_bot_session_lines())
+
+        self._run(monkeypatch, ['scan', path, '--model-source', 'registry', '--no-mlflow'])
+
+        assert 'MLflow not installed' in capsys.readouterr().err
+
+    def test_a_working_registry_is_used_for_scoring(
+        self, monkeypatch, nginx_log_file, capsys
+    ):
+        import types
+
+        from microguard import tracking
+        from microguard.model import BotDetector
+
+        detector = BotDetector(DEFAULT_MODEL_PATH)
+        pyfunc = types.SimpleNamespace(
+            _model_impl=types.SimpleNamespace(
+                python_model=types.SimpleNamespace(detector=detector)
+            )
+        )
+        monkeypatch.setattr(tracking, 'load_model', lambda *a, **k: pyfunc)
+        path = nginx_log_file(_bot_session_lines())
+
+        self._run(monkeypatch, ['scan', path, '--model-source', 'registry', '--no-mlflow'])
+
+        err = capsys.readouterr().err
+        assert 'Loading model from Databricks Registry' in err
+        assert 'Loaded model from Databricks Registry' in err
+
+    def test_mlflow_not_installed_during_scan_logging_stays_quiet(
+        self, monkeypatch, nginx_log_file, capsys
+    ):
+        """Absent is not broken: the extra is optional, so nothing is logged."""
+        from microguard import tracking
+
+        def not_installed(*args, **kwargs):
+            raise ImportError("No module named 'mlflow'")
+
+        monkeypatch.setattr(tracking, 'init', not_installed)
+        path = nginx_log_file(_bot_session_lines())
+
+        self._run(monkeypatch, ['scan', path])
+
+        assert 'MLflow logging failed' not in capsys.readouterr().err

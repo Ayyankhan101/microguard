@@ -279,3 +279,42 @@ class TestLoadingBackWhatWasCollected:
         rows = load_collected(path)
 
         assert "label" not in rows[0]
+
+
+class TestDefaultPathAndBlankLines:
+    """The branches the archive takes when nothing is passed explicitly."""
+
+    def test_no_path_resolves_to_the_default_archive_file(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
+
+        assert collection_path() == tmp_path / "microguard" / "collected" / "decisions.jsonl"
+
+    def test_blank_lines_are_ignored_not_counted_as_corrupt(self, tmp_path):
+        """A trailing newline is normal, not damage."""
+        from microguard.collect import load_collected
+
+        path = tmp_path / "collected.jsonl"
+        DecisionCollector(path).record(_decision(decision_id="real"))
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write("\n   \n")
+
+        rows, skipped = load_collected(path, report_skipped=True)
+
+        assert [r["decision_id"] for r in rows] == ["real"]
+        assert skipped == 0
+
+    def test_a_row_with_the_wrong_feature_width_is_skipped_on_read(self, tmp_path):
+        """Guarded on the way in AND on the way out: the file is append-only
+        on disk and anything can append to it."""
+        from microguard.collect import load_collected
+
+        path = tmp_path / "collected.jsonl"
+        DecisionCollector(path).record(_decision(decision_id="good"))
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps({"decision_id": "narrow", "features": [0.1, 0.2]}) + "\n")
+            handle.write(json.dumps({"decision_id": "absent"}) + "\n")
+
+        rows, skipped = load_collected(path, report_skipped=True)
+
+        assert [r["decision_id"] for r in rows] == ["good"]
+        assert skipped == 2

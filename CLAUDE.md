@@ -43,12 +43,14 @@ python gui/scripts/capture_fixtures.py   # Recapture API fixtures after a shape 
 - typecheck: mypy microguard
 - lint: ruff check .
 - test: pytest
-- coverage: pytest --cov=microguard --cov-report=term-missing (100%; CI gates at 98% via --cov-fail-under)
+- coverage: pytest --cov=microguard --cov-report=term-missing (99.31%; CI
+  gates at 98% via --cov-fail-under, against `.coveragerc-matrix`, which
+  omits only what that job cannot execute — see the CI-parity lanes)
 - frontend: cd gui && npx tsc -b && npm test
 - browser: pytest tests/browser/ (needs `pip install playwright && playwright
   install chromium`; skips cleanly without it, and CI fails the job if it does)
 - deadcode: vulture microguard microguard/vulture_whitelist.py
-- shell: skip (no shell scripts)
+- shell: shellcheck scripts/*.sh
 
 ### CI-parity lanes
 

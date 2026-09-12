@@ -3,7 +3,7 @@
 Deferred work with an explicit trigger for picking it up. Items land here from
 reviews; each one names the condition that should make someone act on it.
 
-## P2 — Cap the actor-record set by count
+## ~~P2 — Cap the actor-record set by count~~ (done 2026-09-13)
 
 **What:** Bound `mg:v2:actor:*` the way `mg:v1:blocked_ips` is bounded, using
 the `ZREMRANGEBYRANK` pattern in `microguard/live/redis_events.py`.
@@ -36,36 +36,50 @@ left as a known, triggered follow-up rather than speculative work.
 **Trigger:** `mg:v2:actor:*` key count above roughly 50,000, or the health panel
 showing sustained growth in novel hashes.
 
-## P2 — Evaluate CrowdSec in place of spec 0002
+**Done:** `ACTOR_INDEX_KEY` (`mg:v2:actor_index`), a ZSET scored by last-seen
+epoch, capped at `MAX_TRACKED_ACTORS = 10_000` via ZREMRANGEBYRANK-equivalent
+eviction in `live/fingerprint.py::_evict_surplus_actors`. Index entry and
+record are dropped together -- an orphaned index entry would be reported as a
+tracked actor by the health panel. Eviction is by recency rather than sightings
+(unlike `blocked_ips`, which keeps the busiest): the busiest actor here is
+usually the farm. The named cost stands -- a slow, patient adversary can be
+pushed out by noisy ones -- and bounded memory is still the better trade.
 
-**What:** Compare integrating CrowdSec against building the threat-intel feed
-work described in `specs/0002-threat-intel-feeds.md`.
+## ~~P2 — Evaluate CrowdSec in place of spec 0002~~ (evaluated 2026-09-13 — declined)
 
-**Why:** CrowdSec is open source, self-hosted, and already provides crowdsourced
-IP reputation shared across its community — the network effect this project
-explicitly gave up on in the epic's Out of Scope. Spec 0002 builds a weaker
-version of the same capability from public feeds plus one keyed source.
+**Decision: do not adopt CrowdSec. Keep what shipped.**
 
-The 2026-09-12 CEO review kept 0002 in scope by decision, but flagged it as the
-cut candidate if the plan needs to shrink. Confirming that with an actual
-comparison beats carrying the assumption.
+The item's premise expired. It asked whether to integrate CrowdSec *instead of
+building* spec 0002, and set its trigger as "before the signal-seam milestone
+starts". That milestone shipped in v3.0.0 (`29aaf79`); `specs/0002` reads
+**SHIPPED**. Tor exit lists, AbuseIPDB, and hosting-range resolution all exist
+in `live/signals_refresher.py` and `live/abuseipdb.py`, behind the out-of-band
+seam in `signals.py`.
 
-**Pros:** Could remove several days of work and the only component that puts an
-outbound network dependency anywhere near the request path. CrowdSec's reputation
-data is strictly better than what public feeds alone provide.
+So the real question is no longer "build or adopt" but "replace working code
+with a dependency", which is a much weaker case:
 
-**Cons:** Adds a substantial external dependency to a tool whose CLI mode is
-deliberately zero-dependency, and integration work is not free either.
+- **The cost that motivated the item is already paid.** The argument was saving
+  several days of work. That work is done, tested, and gated.
+- **The risk it named is already designed out.** The concern was "an outbound
+  network dependency near the request path". The signal seam moved every lookup
+  out of process: `microguard signals` resolves into Redis on its own schedule
+  and `live/scorer.py` only ever reads. CrowdSec would add a *daemon* to that
+  path, which is strictly more coupling than the HTTP fetches it replaces.
+- **It contradicts a standing constraint.** `microguard scan` is deliberately
+  zero-dependency beyond micrograd. CrowdSec is a Go daemon plus a bouncer.
+  That is a reasonable thing for an operator to run and a bad thing for this
+  tool to require.
+- **The network effect is still real, and still not ours to have.** CrowdSec's
+  crowdsourced reputation genuinely beats public feeds. That remains a good
+  reason for an operator to run CrowdSec *alongside* Microguard — which the
+  original review already identified as the complementary case.
 
-**Context:** The relevant distinction found during the review: CrowdSec is strong
-at known-bad IPs and weak against a tuned headless browser on clean residential
-proxies. That second half is what the fingerprinting work targets, so the two are
-complementary rather than alternatives — but only 0002 overlaps.
-
-**Effort:** S to evaluate · **Depends on:** nothing.
-
-**Trigger:** Before the signal-seam milestone starts, or any time the plan needs
-to shrink.
+**What would reopen this:** an operator deployment where CrowdSec is already
+running, making integration a read rather than a new dependency. At that point
+it is a new signal source behind the existing seam (`KNOWN_SIGNAL_SOURCES` in
+`signals.py`), not a replacement, and it inherits the observe-until-promoted
+posture for free.
 
 ## ~~P3 — labeler.py rule-order debt~~ (addressed 2026-09-13)
 

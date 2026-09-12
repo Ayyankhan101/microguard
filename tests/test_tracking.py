@@ -259,3 +259,90 @@ class TestGetRuns:
 
         assert [r["run_id"] for r in runs] == ["r1"]
         assert runs[0]["run_name"] == "train-1"
+
+
+class TestDatabricksExperimentPaths:
+    """Databricks rejects bare experiment names.
+
+    `mlflow.set_experiment("microguard-training")` against a databricks
+    tracking URI fails with `BAD_REQUEST: For input string: "None"` -- an
+    error that names neither the cause nor the fix. Databricks wants an
+    absolute workspace path. Measured directly: the bare name failed, and
+    `/Users/<user>/microguard-training` created experiment 1992678532464586.
+
+    That made the integration broken out of the box for every Databricks
+    user, not a local misconfiguration.
+    """
+
+    def test_a_bare_name_is_qualified_for_databricks(self, monkeypatch):
+        import microguard.tracking as t
+
+        monkeypatch.setattr(t, "_workspace_user", lambda: "someone@example.com")
+
+        resolved = t.resolve_experiment_name("microguard-training", "databricks")
+
+        assert resolved == "/Users/someone@example.com/microguard-training"
+
+    def test_an_absolute_path_is_left_alone(self, monkeypatch):
+        import microguard.tracking as t
+
+        monkeypatch.setattr(t, "_workspace_user", lambda: "someone@example.com")
+
+        resolved = t.resolve_experiment_name("/Shared/mg", "databricks")
+
+        assert resolved == "/Shared/mg"
+
+    def test_a_local_tracking_uri_keeps_the_bare_name(self):
+        """A file:// store has no workspace and no /Users tree."""
+        import microguard.tracking as t
+
+        assert t.resolve_experiment_name("microguard-training", "file:./mlruns") == (
+            "microguard-training"
+        )
+
+    def test_an_unresolvable_user_falls_back_to_the_bare_name(self, monkeypatch):
+        """Better a clear downstream error than a confident wrong path."""
+        import microguard.tracking as t
+
+        def no_user():
+            raise RuntimeError("no credentials")
+
+        monkeypatch.setattr(t, "_workspace_user", no_user)
+
+        assert t.resolve_experiment_name("mg", "databricks") == "mg"
+
+    def test_init_sets_the_qualified_experiment(self, monkeypatch):
+        import microguard.tracking as t
+
+        fake = MagicMock()
+        monkeypatch.setattr(t, "_get_mlflow", lambda: fake)
+        monkeypatch.setattr(t, "_workspace_user", lambda: "someone@example.com")
+        monkeypatch.delenv("MICROGUARD_MLFLOW_TRACKING_URI", raising=False)
+
+        t.init()
+
+        fake.set_experiment.assert_called_once_with(
+            f"/Users/someone@example.com/{t.EXPERIMENT_NAME}"
+        )
+
+
+class TestGetRunsLooksUpTheSameExperimentInitWrote:
+    """init() writes to the resolved path; a reader using the bare name
+    finds nothing and reports an empty history, which reads as "no runs
+    yet" rather than "looking in the wrong place"."""
+
+    def test_the_experiment_lookup_is_qualified_too(self, monkeypatch):
+        import microguard.tracking as t
+
+        fake = MagicMock()
+        client = fake.tracking.MlflowClient.return_value
+        client.get_experiment_by_name.return_value = None
+        monkeypatch.setattr(t, "_get_mlflow", lambda: fake)
+        monkeypatch.setattr(t, "_workspace_user", lambda: "someone@example.com")
+        monkeypatch.delenv("MICROGUARD_MLFLOW_TRACKING_URI", raising=False)
+
+        t.get_runs()
+
+        client.get_experiment_by_name.assert_called_once_with(
+            f"/Users/someone@example.com/{t.EXPERIMENT_NAME}"
+        )

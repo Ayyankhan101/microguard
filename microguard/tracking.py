@@ -51,6 +51,51 @@ def resolved_tracking_uri(tracking_uri: str | None = None) -> str:
     return os.environ.get("MICROGUARD_MLFLOW_TRACKING_URI", "databricks")
 
 
+def _workspace_user() -> str:
+    """The current Databricks user, for building their workspace path.
+
+    Uses databricks-sdk, which mlflow already depends on for its Databricks
+    integration, so this adds nothing to the dependency set.
+    """
+    from databricks.sdk import WorkspaceClient
+
+    user = WorkspaceClient().current_user.me().user_name
+    if not user:
+        raise RuntimeError("Databricks returned no user_name")
+    return user
+
+
+def resolve_experiment_name(name: str, tracking_uri: str) -> str:
+    """Qualify a bare experiment name for Databricks.
+
+    Databricks stores experiments in the workspace file tree and rejects a
+    bare name with `BAD_REQUEST: For input string: "None"` -- an error that
+    names neither the cause nor the fix. Measured: "microguard-training"
+    failed, "/Users/<user>/microguard-training" created the experiment. So
+    the shipped default was broken for every Databricks user, not one
+    misconfigured machine.
+
+    Only for databricks URIs. A file:// store has no workspace and no /Users
+    tree, and a bare name is correct there.
+
+    If the user cannot be resolved, return the name unchanged: a clear
+    downstream auth error beats a confidently wrong path.
+    """
+    if not tracking_uri.startswith("databricks"):
+        return name
+    if name.startswith("/"):
+        return name
+    try:
+        return f"/Users/{_workspace_user()}/{name}"
+    except Exception:
+        logger.warning(
+            "could not resolve the Databricks workspace user; using the bare "
+            "experiment name %r, which Databricks will probably reject",
+            name, exc_info=True,
+        )
+        return name
+
+
 def init(tracking_uri: str | None = None) -> None:
     """Set tracking URI and experiment.
 
@@ -60,9 +105,10 @@ def init(tracking_uri: str | None = None) -> None:
     """
     mlflow = _get_mlflow()
     uri = resolved_tracking_uri(tracking_uri)
-    logger.info("MLflow tracking URI: %s (experiment %s)", uri, EXPERIMENT_NAME)
+    experiment = resolve_experiment_name(EXPERIMENT_NAME, uri)
+    logger.info("MLflow tracking URI: %s (experiment %s)", uri, experiment)
     mlflow.set_tracking_uri(uri)
-    mlflow.set_experiment(EXPERIMENT_NAME)
+    mlflow.set_experiment(experiment)
 
 
 def start_run(run_name: str | None = None):
@@ -138,7 +184,12 @@ def get_runs(limit: int = 20) -> list[dict[str, Any]]:
     """
     mlflow = _get_mlflow()
     client = mlflow.tracking.MlflowClient()
-    experiment = client.get_experiment_by_name(EXPERIMENT_NAME)
+    # The same qualification init() applies. Reading the bare name on
+    # Databricks finds nothing and reports an empty history, which looks
+    # like "no runs yet" rather than "looked in the wrong place".
+    experiment = client.get_experiment_by_name(
+        resolve_experiment_name(EXPERIMENT_NAME, resolved_tracking_uri())
+    )
     if experiment is None:
         return []
     runs = client.search_runs(

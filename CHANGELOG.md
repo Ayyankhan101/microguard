@@ -1,5 +1,80 @@
 # Changelog
 
+## [3.0.1] - 2026-09-12
+
+### Fixed
+
+- **The Databricks integration was never connected, and never could have been.**
+  `databricks-app/app.py` and `app.yaml` imported
+  `microguard.dashboard.app:asgi_app`, which does not exist — the factory is
+  `create_app` — so the Apps deploy would have failed at import. `app.yaml` and
+  `databricks.yml` both used invented schemas rather than the real Databricks
+  Apps / Asset Bundle ones, and `requirements.txt` installed
+  `microguard>=0.2.0` from PyPI, where this package is not published. All four
+  rewritten against the real contracts.
+
+  The entry point now refuses to start without `MICROGUARD_API_TOKEN`.
+  `microguard dashboard` binds loopback because the UI reports every blocked
+  visitor; Databricks Apps is not loopback, so the shared-secret gate is
+  mandatory there and `allow_config_writes` is pinned off.
+
+- **A failed MLflow call said nothing.** `scan` runs with tracking ON by
+  default pointing at `databricks`, which needs credentials to resolve.
+  Without them `init()` raised, `cli.py` caught it with a bare `pass`, and the
+  scan exited normally having recorded nothing — indistinguishable from a run
+  that recorded everything. Failures now name the resolved tracking URI
+  (`tracking.resolved_tracking_uri()`, which does not need mlflow imported to
+  answer) and never change a scan's exit code. `ImportError` stays quiet:
+  mlflow is an optional extra, and absent is not broken.
+
+- **Version drift.** `setup.py` said `2.0.0` while `microguard/__init__.py`
+  said `3.0.0` and `cli.py info` printed a third hardcoded literal. `setup.py`
+  now parses the version out of the package, and both the CLI and the tests
+  read `__version__` rather than restating it.
+
+- **Train/serve normalization skew.** `training/train.py::normalize_features`
+  maps a zero-range feature column to `0.5`; `model.py`'s `predict()` mapped
+  the same column to `0.0`, so any column constant across the training set
+  reached the network as a value it was never trained on. One column is
+  affected in the shipped model (`method_mismatch_count`). `predict()` now
+  goes through `BotDetector.normalize()`, the single implementation, and
+  returns `0.5` to match training.
+
+  Consequence worth knowing: the live path zeroes two features it cannot
+  compute before the app responds, and the measured worst-case score shift
+  from that went from 0.0183 to 0.1086. The model is more status-sensitive
+  than the old number implied — the old number was low because the network
+  was being run off its trained operating point, not because the margin was
+  wide. No holdout decision flips.
+
+- **`retrain_deployment_model` fitted the wrong scale.** It handed raw
+  correction features to `train()` while `predict()` normalizes, so every
+  per-deployment model was fitted on one scale and served another. Same
+  family as the missing-`normalization.json` bug above, on the path an
+  operator drives by hand. Corrections are now normalized before training.
+
+- **Training could collapse to a constant classifier and be saved anyway.**
+  Roughly a quarter of random initializations produce a network whose hidden
+  units never fire: with non-negative inputs and zero biases, a unit whose
+  weights sum negative cannot activate, and a ReLU that never fires has no
+  gradient — the weights come back bit-for-bit unchanged. More epochs do not
+  help. Neither does fan-in (He) weight scaling; both were measured and
+  neither moved the failure rate.
+
+  Two guards now:
+  - `BotDetector.check_not_degenerate()` raises `DegenerateModelError` when a
+    model labels every training session the same class while the labels
+    contain both. Checked before `os.replace` in `retrain_deployment_model`
+    and before `save()` in `train_model`.
+  - `BotDetector.train_until_it_learns()` redraws and starts over on a
+    collapse, up to five attempts. Fresh training redraws the network;
+    fine-tuning reloads the baseline it is adapting. End-to-end retrain
+    success went from ~28/40 seeds to 37/40.
+
+  `BotDetector.has_live_hidden_units()` catches the case retries cannot fix:
+  a baseline that is itself dead reloads identically every attempt, so it is
+  named directly rather than reported as a generic collapse.
+
 ## [3.0.0] - 2026-09-12
 
 ### Breaking
@@ -278,14 +353,7 @@ These surfaced while writing the tests above. Each is pinned by a test that
 names it as a defect, so the eventual fix reads as a deliberate change rather
 than a regression.
 
-- **Train/serve normalization skew.** `training/train.py` maps a zero-range
-  feature column to `0.5`; `model.py`'s `predict()` maps the same column to
-  `0.0`. The network is therefore served an input it never saw in training.
-  One column is affected in the shipped model (`method_mismatch_count`, which
-  is constant in the training data). Measured end-to-end score shift: 0.007
-  mean, 0.097 worst case — small, but a 0.097 shift beside a 0.85 threshold can
-  flip a borderline block. Fixing it means choosing a side and retraining, so
-  it belongs in its own change.
+- ~~**Train/serve normalization skew.**~~ Fixed — see [3.0.1].
 - **Heuristic rule 22 is unreachable.** `Cloudflare-protected site, normal
   browser` (human, 0.65) exists to protect a real visitor whose UA carries a
   CDN marker. Rule 5 returns `bot` at 0.90 for any UA matching the same CDN

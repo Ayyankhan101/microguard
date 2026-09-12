@@ -572,14 +572,24 @@ class TestLiveFeatureShape:
 
     def test_score_shift_stays_small(self):
         """A wide decision margin is what makes the zeroing harmless. If the
-        shift grows, the margin is being eaten even before decisions flip."""
+        shift grows, the margin is being eaten even before decisions flip.
+
+        The bound was 0.10 while `predict()` fed a zero-range column 0.0 and
+        training had fed it 0.5. Serving the model the value it was trained
+        on moved the measured worst case from 0.0183 to 0.1086 -- the model
+        is more status-sensitive than the old number implied, and the old
+        number was low because the network was being run off its trained
+        operating point, not because the margin was wide. No decision flips
+        (`test_masking_status_features_changes_no_decision` is the hard
+        guard); this bounds the drift from where it actually sits.
+        """
         model = _load_model()
         rows = _load_holdout()['features']
         shifts = [
             abs(model.predict(real) - model.predict(live))
             for real, live in zip(rows, _mask_status_features(rows))
         ]
-        assert max(shifts) < 0.10, f"max score shift {max(shifts):.4f} is no longer negligible"
+        assert max(shifts) < 0.12, f"max score shift {max(shifts):.4f} is no longer negligible"
 
 
 class TestModelLoadingIsComplete:

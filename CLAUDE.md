@@ -74,6 +74,32 @@ Redis and a stable clock. Run these on a **clean tree** before pushing:
   a drop in the number they actually compute — it read 100% locally while CI
   read 93%.
 
+  Watch the **precise** number, not the rounded one:
+  `coverage report --rcfile=.coveragerc-matrix --precision=2`. coverage.py
+  rounds to the display precision before comparing against `--cov-fail-under`,
+  so 97.74% renders as "98%" and passes — while sitting eight uncovered
+  statements from red, with the cause several files away.
+
+- matrix deps: run the suite with the packages that job does **not** install
+  blocked, rather than with whatever happens to be in your environment:
+
+  ```bash
+  python -c "
+  import sys
+  sys.modules['numpy'] = None; sys.modules['mlflow'] = None
+  import pytest; raise SystemExit(pytest.main(
+      ['tests/','-q','--deselect','tests/live','--deselect','tests/browser']))"
+  ```
+
+  The matrix installs `.[live,fastapi,flask,dashboard]` plus
+  `pytest pytest-cov httpx httpx2` — **not** the `mlflow` extra, and therefore
+  not numpy or pandas either. A test that imports one of those passes on any
+  dev machine that has it for unrelated reasons and fails all 12 matrix jobs.
+  That is exactly how `tests/test_tracking.py::TestPyFunc::test_predict`
+  shipped: `import numpy as np`, green locally, `ModuleNotFoundError` on every
+  runner. Guard such tests with `pytest.importorskip`, and add any newly
+  optional dependency to the blocked list above.
+
 ## Test suite conventions
 
 - Shared `LogEntry`/`Session`/temp-log-file builders live in `tests/conftest.py`

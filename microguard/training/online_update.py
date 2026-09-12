@@ -32,7 +32,7 @@ import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
-from ..model import DEFAULT_MODEL_PATH, BotDetector
+from ..model import DEFAULT_MODEL_PATH, BotDetector, DegenerateModelError
 
 logger = logging.getLogger(__name__)
 
@@ -242,13 +242,51 @@ def retrain_deployment_model(
 
     detector = BotDetector()
     detector.load(str(base_model_path))
-    detector.train(
-        [row["features"] for row in rows],
-        labels,
-        epochs=epochs,
-        learning_rate=learning_rate,
-        verbose=False,
-    )
+
+    # Fine-tune on the scale the model is served. train() feeds its input
+    # straight to the network, while predict() normalizes first, so handing
+    # it raw corrections fits one scale and serves another -- the same
+    # mismatch the missing-normalization bug produced, on the path an
+    # operator drives by hand. Normalize here, then switch predict() back
+    # so inference normalizes again.
+    features = [detector.normalize(row["features"]) for row in rows]
+    norm_mins, norm_maxs = detector.norm_mins, detector.norm_maxs
+    detector.norm_mins = detector.norm_maxs = None
+
+    def reload_baseline() -> None:
+        """Start the next attempt from the baseline, not from noise.
+
+        This is fine-tuning: the point is to adapt the shipped model, so a
+        collapsed attempt reloads it rather than redrawing a new network.
+        load() would also restore the normalization params, which must stay
+        off while training sees already-normalized features.
+        """
+        detector.load(str(base_model_path))
+        detector.norm_mins = detector.norm_maxs = None
+
+    if not detector.has_live_hidden_units(features):
+        detector.norm_mins, detector.norm_maxs = norm_mins, norm_maxs
+        raise DegenerateModelError(
+            f"the baseline model at {base_model_path} has no hidden unit that "
+            f"fires on these corrections, so fine-tuning it cannot change "
+            f"anything. Retrain the baseline before adapting it."
+        )
+
+    try:
+        attempts = detector.train_until_it_learns(
+            features,
+            labels,
+            reset=reload_baseline,
+            epochs=epochs,
+            learning_rate=learning_rate,
+            verbose=False,
+        )
+    finally:
+        detector.norm_mins, detector.norm_maxs = norm_mins, norm_maxs
+    if attempts > 1:
+        logger.warning(
+            "deployment %r needed %d training attempts", deployment_id, attempts
+        )
 
     target = deployment_model_path(deployment_id, feedback_dir)
     target.parent.mkdir(parents=True, exist_ok=True)

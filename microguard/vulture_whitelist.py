@@ -62,3 +62,14 @@ api_live.write_config
 # FastAPI @app.middleware registers this by decoration; it is never called by name.
 _.check_token
 _.model_config
+
+# MLflow / Databricks surface. None of these are called by name from this
+# package: the route is registered by decoration, and the pyfunc wrapper and
+# its load_context hook are instantiated by mlflow when it loads a model from
+# the Registry.
+from microguard import tracking
+from microguard.dashboard import api_mlflow
+
+api_mlflow.mlflow_runs
+tracking.BotDetectorPyFunc
+_.load_context

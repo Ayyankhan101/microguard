@@ -8,14 +8,18 @@ import json
 import os
 import random
 import sys
+from typing import Any
 
 # Add parent directory to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from micrograd.nn import MLP
 
 from microguard.features import extract_features, group_into_sessions
 from microguard.labeler import label_session
 from microguard.model import BotDetector
 from microguard.parser import LogEntry, parse_file
+from microguard.tracking import MODEL_NAME
 from microguard.training.generate import generate_stealthy_bot_session
 
 
@@ -146,7 +150,7 @@ def train_model(
     group_ids: list[str] | None = None,
     provenance: list[str] | None = None,
     holdout_frac: float = 0.2,
-) -> BotDetector:
+) -> tuple[BotDetector, dict[str, Any]]:
     """Train the bot detection model with normalization.
 
     Computes normalization from training data, normalizes features,
@@ -166,7 +170,11 @@ def train_model(
         holdout_frac: Fraction of groups (per class) held out for eval.
 
     Returns:
-        Trained BotDetector
+        (Trained BotDetector, metrics dict) tuple. Metrics dict contains:
+        - accuracy, tp, tn, fp, fn, precision, recall
+        - holdout_accuracy, holdout_precision, holdout_recall (if holdout used)
+        - adversarial_recall (if adversarial eval run)
+        - _artifacts: dict of file paths for MLflow logging
     """
     holdout_features: list[list[float]] | None = None
     holdout_labels: list[float] | None = None
@@ -219,16 +227,28 @@ def train_model(
     features = list(shuffled_features)
     labels = list(shuffled_labels)
 
-    # Train
-    model.train(
-        features=features,
-        labels=labels,
+    # Train. Roughly a quarter of random initializations collapse to a
+    # constant classifier and stay there -- a hidden unit whose weights sum
+    # negative never fires on non-negative inputs, and a ReLU that never
+    # fires has no gradient to learn from. Redraw and start over rather than
+    # saving a model that scores every session the same.
+    def redraw() -> None:
+        model.model = MLP(BotDetector.NUM_FEATURES, [4, 1])
+        model.norm_mins = None
+        model.norm_maxs = None
+
+    attempts = model.train_until_it_learns(
+        features,
+        labels,
+        reset=redraw,
         epochs=epochs,
         batch_size=min(32, len(features)),
         learning_rate=learning_rate,
         val_split=0.2,
         verbose=True,
     )
+    if attempts > 1:
+        print(f"   (took {attempts} attempts — earlier ones collapsed)")
     
     # Restore normalization params so predict() works at inference time
     model.norm_mins = mins
@@ -265,6 +285,10 @@ def train_model(
     if tp + fn > 0:
         recall = tp / (tp + fn)
         print(f"   Recall: {recall:.1%}")
+
+    # Initialize for adversarial eval tracking
+    real_human_holdout: list[list[float]] = []
+    n_adv: int = 0
 
     # Held-out evaluation — the only honest generalization number. The
     # "Final Evaluation" above is train-set fit and will always look
@@ -375,7 +399,41 @@ def train_model(
             print(f"   Stealthy-bot recall: {adv_recall:.1%} (see file's 'note' — this is an easier")
             print("   test than real diverse human traffic would be; not proof of robustness)")
 
-    return model
+    # Collect metrics for return
+    norm_path = os.path.join(os.path.dirname(model_path) or '.', 'normalization.json')
+    result_metrics: dict[str, Any] = {
+        "accuracy": accuracy,
+        "tp": tp,
+        "tn": tn,
+        "fp": fp,
+        "fn": fn,
+    }
+    if tp + fp > 0:
+        result_metrics["precision"] = tp / (tp + fp)
+    if tp + fn > 0:
+        result_metrics["recall"] = tp / (tp + fn)
+
+    # Held-out metrics
+    if holdout_features is not None and holdout_labels is not None:
+        result_metrics["holdout_accuracy"] = h_acc
+        if h_tp + h_fp > 0:
+            result_metrics["holdout_precision"] = h_tp / (h_tp + h_fp)
+        if h_tp + h_fn > 0:
+            result_metrics["holdout_recall"] = h_tp / (h_tp + h_fn)
+
+    # Adversarial metric
+    if holdout_features is not None and real_human_holdout and n_adv > 0:
+        result_metrics["adversarial_recall"] = adv_recall
+
+    # Artifact paths for MLflow logging
+    result_metrics["_artifacts"] = {
+        "model": model_path,
+        "normalization": norm_path,
+        "eval_holdout": holdout_path if holdout_features is not None else None,
+        "adversarial_eval": adv_path if (holdout_features is not None and real_human_holdout and n_adv > 0) else None,
+    }
+
+    return model, result_metrics
 
 
 def default_data_dir() -> str:
@@ -388,7 +446,7 @@ def default_data_dir() -> str:
     return os.path.join(os.path.dirname(os.path.dirname(here)), 'data')
 
 
-def main(data_dir: str | None = None, epochs: int = 100, learning_rate: float = 0.05):
+def main(data_dir: str | None = None, epochs: int = 100, learning_rate: float = 0.05, mlflow_enabled: bool = True):
     """Main training entry point.
 
     Args:
@@ -399,6 +457,7 @@ def main(data_dir: str | None = None, epochs: int = 100, learning_rate: float = 
             shipped model.json, normalization.json and both eval sets.
         epochs: Training epochs. Lower it for a smoke run.
         learning_rate: SGD learning rate.
+        mlflow_enabled: Log to MLflow if available (default: True).
     """
     # Not exercised in tests on purpose: taking this branch means training
     # against the real data/ and overwriting the shipped model. The resolution
@@ -408,6 +467,7 @@ def main(data_dir: str | None = None, epochs: int = 100, learning_rate: float = 
 
     group_ids = None
     provenance = None
+    data_source = "synthetic"
 
     # Priority 0: real bot-training data — real ground-truth-labeled attack
     # traffic (organization-x) + real Harvard human sessions, with a
@@ -416,6 +476,7 @@ def main(data_dir: str | None = None, epochs: int = 100, learning_rate: float = 
     # alone because its bot class is real, not synthetic.
     real_bot_path = os.path.join(data_dir, 'real_bot_training_data.json')
     if os.path.exists(real_bot_path):
+        data_source = "real_bot_training_data"
         print(f"📂 Loading real bot-training data from: {real_bot_path}")
         with open(real_bot_path, encoding='utf-8') as f:
             data = json.load(f)
@@ -428,6 +489,7 @@ def main(data_dir: str | None = None, epochs: int = 100, learning_rate: float = 
 
     # Priority 1: Harvard training data (pre-processed from Dataverse)
     elif os.path.exists(harvard_path := os.path.join(data_dir, 'harvard_training_data.json')):
+        data_source = "harvard"
         print(f"📂 Loading Harvard training data from: {harvard_path}")
         with open(harvard_path, encoding='utf-8') as f:
             data = json.load(f)
@@ -437,6 +499,7 @@ def main(data_dir: str | None = None, epochs: int = 100, learning_rate: float = 
     
     # Priority 2: Real training data (Zenodo + synthetic combined)
     elif os.path.exists(os.path.join(data_dir, 'real_training_data.json')):
+        data_source = "real_training"
         real_path = os.path.join(data_dir, 'real_training_data.json')
         print(f"📂 Loading real training data from: {real_path}")
         with open(real_path, encoding='utf-8') as f:
@@ -447,6 +510,7 @@ def main(data_dir: str | None = None, epochs: int = 100, learning_rate: float = 
     
     # Priority 3: Raw logs (Zenodo Apache logs)
     elif os.path.exists(os.path.join(data_dir, 'access.log')):
+        data_source = "access_log"
         dataset_path = os.path.join(data_dir, 'access.log')
         print(f"📂 Loading dataset from: {dataset_path}")
         entries = list(parse_file(dataset_path))
@@ -462,15 +526,79 @@ def main(data_dir: str | None = None, epochs: int = 100, learning_rate: float = 
     
     # Train model
     model_path = os.path.join(data_dir, 'model.json')
-    model = train_model(
-        features=features,
-        labels=labels,
-        model_path=model_path,
-        epochs=epochs,
-        learning_rate=learning_rate,
-        group_ids=group_ids,
-        provenance=provenance,
-    )
+
+    # Attempt MLflow logging if enabled
+    use_mlflow = False
+    if mlflow_enabled:
+        try:
+            from ..tracking import (
+                init,
+                log_artifact,
+                log_metrics,
+                log_params,
+                register_model,
+                start_run,
+            )
+            init()
+            use_mlflow = True
+        except ImportError:
+            print("⚠️  MLflow not installed — running without experiment tracking")
+        except Exception as e:  # noqa: BLE001 — tracking never decides whether training runs
+            from microguard.tracking import resolved_tracking_uri
+            print(
+                f"⚠️  MLflow init failed (tracking URI: {resolved_tracking_uri()}): "
+                f"{e} — running without experiment tracking"
+            )
+
+    if use_mlflow:
+        with start_run(run_name=f"train-{data_source}") as run:
+            log_params({
+                "epochs": epochs,
+                "learning_rate": learning_rate,
+                "batch_size": min(32, len(features)),
+                "data_source": data_source,
+                "n_samples": len(features),
+                "n_bot": sum(labels),
+                "n_human": len(labels) - sum(labels),
+            })
+
+            model, metrics = train_model(
+                features=features,
+                labels=labels,
+                model_path=model_path,
+                epochs=epochs,
+                learning_rate=learning_rate,
+                group_ids=group_ids,
+                provenance=provenance,
+            )
+
+            # Log numeric metrics (exclude _artifacts key)
+            artifact_paths = metrics.pop("_artifacts", {})
+            log_metrics(metrics)
+
+            # Log artifacts
+            for name, path in artifact_paths.items():
+                if path and os.path.exists(path):
+                    if name in ("model", "normalization"):
+                        # Log model.json and normalization.json together
+                        log_artifact(path, artifact_path="model")
+                    else:
+                        log_artifact(path)
+
+            # Register model to Registry (Staging)
+            register_model(run.info.run_id, artifact_path="model")
+            print(f"\n📊 Logged to MLflow run: {run.info.run_id}")
+            print(f"   Model registered as: {MODEL_NAME}")
+    else:
+        model, metrics = train_model(
+            features=features,
+            labels=labels,
+            model_path=model_path,
+            epochs=epochs,
+            learning_rate=learning_rate,
+            group_ids=group_ids,
+            provenance=provenance,
+        )
     
     print("\n✅ Training complete!")
     print(f"   Model: {model}")

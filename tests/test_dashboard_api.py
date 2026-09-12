@@ -64,7 +64,12 @@ class TestHealth:
 
         assert response.status_code == 200
         body = response.json()
-        assert body["version"] == "3.0.0"
+        # Against the package, not a literal: setup.py and __init__.py had
+        # already drifted two majors apart, and a literal here would have to
+        # be chased on every bump.
+        from microguard import __version__
+
+        assert body["version"] == __version__
         assert isinstance(body["model_loaded"], bool)
         assert isinstance(body["redis_connected"], bool)
 

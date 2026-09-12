@@ -78,3 +78,16 @@ class InMemoryStore:
 @pytest.fixture()
 def store():
     return InMemoryStore()
+
+
+@pytest.fixture(autouse=True)
+def _never_touch_the_real_cache(tmp_path, monkeypatch):
+    """Keep feed caches out of the developer's real ~/.cache.
+
+    `build_sources(cache=None)` resolves to `cache_dir()`, which is the right
+    production default and the wrong thing for a test: a run would write a
+    two-line fixture feed into the user's cache, and the NEXT run would read it
+    back as fresh and skip the injected fetch entirely. That is how a passing
+    suite starts hiding a broken source.
+    """
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "xdg"))

@@ -67,7 +67,7 @@ class TestBuildSources:
 
 
 class TestRefreshLoop:
-    def test_it_runs_the_requested_number_of_passes(self, clean):
+    def test_it_runs_the_requested_number_of_passes(self, clean, tmp_path):
         RedisSessionStateStore(clean, default_ttl=60).record_request(
             "1.1.1.1", "ua", _entry("1.1.1.1")
         )
@@ -75,11 +75,11 @@ class TestRefreshLoop:
             client=clean, interval=0, _max_iterations=2,
             tor_fetch=lambda: "1.1.1.1\n",
             cidr_fetch=lambda: json.dumps({"prefixes": []}),
-            cache=None,
+            cache=tmp_path,
         )
         assert json.loads(clean.get("mg:v1:signals:1.1.1.1"))["tor_exit"] is True
 
-    def test_a_pass_that_raises_does_not_kill_the_loop(self, clean, caplog):
+    def test_a_pass_that_raises_does_not_kill_the_loop(self, clean, caplog, tmp_path):
         """A refresher that exits on one bad pass stops resolving signals
         silently, and the check server would just read staler and staler
         records without anything saying why."""
@@ -92,7 +92,7 @@ class TestRefreshLoop:
 
         run_refresher(
             client=Exploding(), interval=0, _max_iterations=2,
-            tor_fetch=lambda: "", cidr_fetch=lambda: "{}", cache=None,
+            tor_fetch=lambda: "", cidr_fetch=lambda: "{}", cache=tmp_path,
         )
         assert len(calls) >= 2
         assert "refresh pass failed" in caplog.text

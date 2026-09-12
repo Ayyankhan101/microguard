@@ -69,6 +69,21 @@ DEFAULT_WINDOW_S = 600
 # Actor records are the one structure here that outlives a session. Sliding, so
 # an actor that stops appearing ages out with no sweeper.
 DEFAULT_ACTOR_TTL_S = 30 * 24 * 3600
+
+# Index of every actor record, scored by last-seen epoch. The records
+# themselves are individually TTL'd but nothing bounded HOW MANY existed: a
+# farm generating novel fingerprints creates one key per hash with nothing
+# evicting them for a month. Same failure class as mg:v1:blocked_ips, which
+# grew with the number of distinct attackers until it was capped.
+ACTOR_INDEX_KEY = "mg:v2:actor_index"
+
+# Evicted by RECENCY, not by sightings. blocked_ips keeps the busiest because
+# a repeat blocker is the interesting one there; here the busiest actor is
+# usually the farm, and the record worth keeping is whichever was seen last.
+# The cost is real and worth naming: a slow, patient adversary can be pushed
+# out by noisy short-lived ones. Bounded memory is still the better trade --
+# an unbounded set degrades everything.
+MAX_TRACKED_ACTORS = 10_000
 DEFAULT_FP_TTL_S = 1800
 
 
@@ -196,4 +211,38 @@ def _actor_pipeline(
     pipe.hincrby(key, "sightings", 1)
     # Sliding, so an actor that stops appearing ages out with no sweeper.
     pipe.expire(key, ttl)
+    # ZADD re-scores an existing member rather than adding a second, so a
+    # returning actor moves up the index instead of being evicted by its own
+    # return. The index outlives no record: same TTL, refreshed on every touch.
+    pipe.zadd(ACTOR_INDEX_KEY, {key.removeprefix(ACTOR_PREFIX): now})
+    pipe.expire(ACTOR_INDEX_KEY, ttl)
     pipe.execute()
+    _evict_surplus_actors(client)
+
+
+def _evict_surplus_actors(client: redis.Redis) -> None:
+    """Drop the least recently seen actors above the ceiling.
+
+    The index entry and the record it points at are removed together. An index
+    entry whose hash is gone would be reported as a tracked actor by the signal
+    health panel, which is a lie; a record with no index entry would never be
+    evicted at all.
+
+    Never raises: this runs on the /fp path, and losing an eviction is a memory
+    cost while raising is a failed request.
+    """
+    try:
+        tracked = cast("int", client.zcard(ACTOR_INDEX_KEY))
+        surplus = tracked - MAX_TRACKED_ACTORS
+        if surplus <= 0:
+            return
+        doomed = cast("list[str]", client.zrange(ACTOR_INDEX_KEY, 0, surplus - 1))
+        if not doomed:
+            return
+        pipe = client.pipeline()
+        pipe.zrem(ACTOR_INDEX_KEY, *doomed)
+        for member in doomed:
+            pipe.delete(f"{ACTOR_PREFIX}{member}")
+        pipe.execute()
+    except redis.RedisError:
+        logger.warning("actor index eviction failed, continuing", exc_info=True)

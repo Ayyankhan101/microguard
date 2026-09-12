@@ -331,3 +331,71 @@ class TestActorCountsAreAtomic:
 
         assert record_fingerprint(clean, "203.0.113.5", HASH_A) is None
         assert json.loads(clean.get(f"{FP_PREFIX}203.0.113.5"))["hash"] == HASH_A
+
+
+class TestActorRecordsAreCapped:
+    """`mg:v2:actor:*` was the last unbounded structure.
+
+    A 30-day sliding TTL is fine when the number of distinct fingerprints is
+    small and stable, which is what normal traffic looks like. It is not fine
+    against a farm generating novel hashes: one key per hash, nothing evicting
+    them for a month.
+
+    Same failure class as `mg:v1:blocked_ips`, which grew with the number of
+    distinct attackers until it was capped -- so the fix is the same
+    ZREMRANGEBYRANK pattern from `live/redis_events.py`, keeping the most
+    recently seen rather than the busiest.
+    """
+
+    def test_the_index_tracks_every_actor_touched(self, clean):
+        from microguard.live.fingerprint import ACTOR_INDEX_KEY, _touch_actor
+
+        for i in range(5):
+            _touch_actor(clean, f"hash{i}", distinct_ips=1, ttl=3600)
+
+        assert clean.zcard(ACTOR_INDEX_KEY) == 5
+
+    def test_the_index_is_capped_and_evicts_the_least_recent(self, clean, monkeypatch):
+        import microguard.live.fingerprint as fp
+
+        monkeypatch.setattr(fp, "MAX_TRACKED_ACTORS", 3)
+        for i in range(6):
+            fp._touch_actor(clean, f"hash{i}", distinct_ips=1, ttl=3600)
+
+        members = clean.zrange(fp.ACTOR_INDEX_KEY, 0, -1)
+
+        assert len(members) == 3
+        # Newest three survive; the first three were evicted by recency.
+        assert set(members) == {"hash3", "hash4", "hash5"}
+
+    def test_evicting_an_actor_drops_its_record_too(self, clean, monkeypatch):
+        """An index entry without its hash is a lie the health panel would
+        report as a tracked actor."""
+        import microguard.live.fingerprint as fp
+
+        monkeypatch.setattr(fp, "MAX_TRACKED_ACTORS", 2)
+        for i in range(4):
+            fp._touch_actor(clean, f"hash{i}", distinct_ips=1, ttl=3600)
+
+        assert not clean.exists(f"{fp.ACTOR_PREFIX}hash0")
+        assert clean.exists(f"{fp.ACTOR_PREFIX}hash3")
+
+    def test_a_returning_actor_is_refreshed_not_duplicated(self, clean):
+        """Re-seeing an actor must move it up the index, not add a second
+        entry -- otherwise a patient adversary is evicted by its own return."""
+        from microguard.live.fingerprint import ACTOR_INDEX_KEY, _touch_actor
+
+        _touch_actor(clean, "steady", distinct_ips=1, ttl=3600)
+        _touch_actor(clean, "noisy", distinct_ips=1, ttl=3600)
+        _touch_actor(clean, "steady", distinct_ips=2, ttl=3600)
+
+        assert clean.zcard(ACTOR_INDEX_KEY) == 2
+        # "steady" was touched last, so it ranks highest.
+        assert clean.zrange(ACTOR_INDEX_KEY, -1, -1) == ["steady"]
+
+    def test_the_index_expires_so_it_cannot_outlive_its_records(self, clean):
+        from microguard.live.fingerprint import ACTOR_INDEX_KEY, _touch_actor
+
+        _touch_actor(clean, "h", distinct_ips=1, ttl=3600)
+
+        assert clean.ttl(ACTOR_INDEX_KEY) > 0

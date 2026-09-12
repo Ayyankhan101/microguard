@@ -4,7 +4,7 @@ A tiny, zero-dependency CLI tool that detects malicious bot traffic
 in your API access logs using a micrograd neural network.
 """
 
-__version__ = "3.0.0"
+__version__ = "3.0.1"
 __author__ = "Microguard"
 
 from .cli import scan_logfile

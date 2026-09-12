@@ -207,12 +207,69 @@ class TestMainCLI:
     def test_info_command_does_not_exit_and_prints_version(self, monkeypatch, capsys):
         monkeypatch.setattr(sys, 'argv', ['microguard', 'info'])
         cli_module.main()  # no SystemExit — info falls through normally
-        assert 'v3.0.0' in capsys.readouterr().out
+        from microguard import __version__
+
+        assert f'v{__version__}' in capsys.readouterr().out
 
     def test_bare_invocation_runs_sample_scan(self, monkeypatch, capsys):
         code = self._run(monkeypatch, [])
         assert code == 0
         assert 'sample scan' in capsys.readouterr().out.lower()
+
+    def test_a_failing_mlflow_log_says_so(self, monkeypatch, nginx_log_file, capsys):
+        """MLflow is ON by default and points at 'databricks'.
+
+        Without credentials `init()` raises, and the scan used to swallow it
+        and exit normally, so a run that recorded nothing looked identical to
+        a run that recorded everything.
+        """
+        from microguard import tracking
+
+        def boom(*args, **kwargs):
+            raise RuntimeError("no credentials")
+
+        monkeypatch.setattr(tracking, 'init', boom)
+        path = nginx_log_file(_bot_session_lines())
+        self._run(monkeypatch, ['scan', path])
+
+        err = capsys.readouterr().err.lower()
+        assert 'mlflow logging failed' in err
+        assert 'no credentials' in err
+        # Naming the URI is the point: "it failed" without "pointing where"
+        # sends you looking in the wrong place.
+        assert 'databricks' in err
+
+    def test_a_failing_mlflow_log_does_not_change_the_exit_code(
+        self, monkeypatch, nginx_log_file
+    ):
+        """Tracking is observability. It must never decide a scan's verdict."""
+        from microguard import tracking
+
+        def boom(*args, **kwargs):
+            raise RuntimeError("no credentials")
+
+        path = nginx_log_file(_graphql_session_lines())
+        clean = self._run(monkeypatch, ['scan', path, '--threshold', '0.99', '--no-mlflow'])
+
+        monkeypatch.setattr(tracking, 'init', boom)
+        with_failure = self._run(monkeypatch, ['scan', path, '--threshold', '0.99'])
+
+        assert with_failure == clean == 0
+
+    def test_mlflow_not_being_installed_is_not_reported_as_a_failure(
+        self, monkeypatch, nginx_log_file, capsys
+    ):
+        """Absent is not broken -- the dependency is genuinely optional."""
+        from microguard import tracking
+
+        def not_installed(*args, **kwargs):
+            raise ImportError("No module named 'mlflow'")
+
+        monkeypatch.setattr(tracking, 'init', not_installed)
+        path = nginx_log_file(_bot_session_lines())
+        self._run(monkeypatch, ['scan', path])
+
+        assert 'mlflow logging failed' not in capsys.readouterr().err.lower()
 
     def test_probe_https_dispatches_to_http_probe(self, monkeypatch):
         calls = {}

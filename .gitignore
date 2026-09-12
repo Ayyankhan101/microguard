@@ -24,3 +24,5 @@ data/probe_report.html
 node_modules/
 *.tsbuildinfo
 .DS_Store
+.opencode/
+linkedin-assets/

@@ -1,8 +1,20 @@
+import pathlib
+import re
+
 from setuptools import find_packages, setup
+
+# Read the version from the package rather than restating it. These drifted:
+# setup.py said 2.0.0 while microguard/__init__.py said 3.0.0, so a wheel
+# reported a version four majors behind what the code called itself. Parsed
+# with a regex instead of imported so setup.py never needs the dependencies.
+_INIT = pathlib.Path(__file__).parent / "microguard" / "__init__.py"
+_VERSION = re.search(
+    r'^__version__ = "([^"]+)"', _INIT.read_text(encoding="utf-8"), re.MULTILINE
+).group(1)
 
 setup(
     name="microguard",
-    version="2.0.0",
+    version=_VERSION,
     description="CLI bot traffic audit tool powered by micrograd",
     author="Microguard",
     license="MIT",
@@ -25,6 +37,7 @@ setup(
             "sse-starlette>=2.1",
         ],
         "flask": ["flask>=3.0"],
+        "mlflow": ["mlflow>=2.10,<3"],
     },
     entry_points={
         "console_scripts": [

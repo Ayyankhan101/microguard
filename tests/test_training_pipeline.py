@@ -155,31 +155,30 @@ class TestNormalizeFeatures:
         assert normalized == [[0.0], [0.5], [1.0]]
 
     def test_a_constant_column_becomes_one_half_at_training_time(self):
-        """Pins a known divergence, not intended behavior.
+        """A zero-range column carries no information, so it gets 0.5.
 
-        Training maps a zero-range column to 0.5 here, while
-        BotDetector.predict maps the same column to 0.0 at inference. So the
-        network is served an input it never saw during training. One column is
-        affected in the shipped model (method_mismatch_count); the measured
-        end-to-end score shift is 0.007 on average and 0.097 at worst.
-
-        Recorded so the eventual fix reads as a deliberate change. See
-        CHANGELOG.
+        Inference must use the same value; `BotDetector.normalize` is the
+        other half of this pair and is asserted directly below.
         """
         normalized = normalize_features([[3.0], [3.0]], mins=[3.0], maxs=[3.0])
 
         assert normalized == [[0.5], [0.5]]
 
-    def test_inference_maps_the_same_column_to_zero(self):
-        """The other half of the divergence, asserted against the real code."""
+    def test_inference_maps_the_same_column_to_one_half_too(self):
+        """The other half, asserted against the real code.
+
+        These disagreed until the train/serve skew was fixed: training said
+        0.5 and inference said 0.0, so any column constant across the training
+        set reached the network as a value it had never been trained on.
+        """
         from microguard.model import BotDetector
 
         detector = BotDetector()
         detector.norm_mins = [3.0] * FEATURE_COUNT
         detector.norm_maxs = [3.0] * FEATURE_COUNT
 
-        # predict() normalizes internally; a zero-range column yields 0.0 there
-        # rather than the 0.5 the trainer used.
+        assert detector.normalize([3.0] * FEATURE_COUNT) == [0.5] * FEATURE_COUNT
+        # A zero-range column swallows its input, whatever it is.
         assert detector.predict([3.0] * FEATURE_COUNT) == detector.predict([99.0] * FEATURE_COUNT)
 
 
@@ -337,7 +336,7 @@ class TestTrainModel:
         features, labels, _g, _p = self._dataset()
         model_path = tmp_path / "model.json"
 
-        train_model(features, labels, model_path=str(model_path), epochs=2)
+        _model, _metrics = train_model(features, labels, model_path=str(model_path), epochs=2)
 
         assert model_path.exists()
         assert (tmp_path / "normalization.json").exists()
@@ -350,7 +349,7 @@ class TestTrainModel:
 
         features, labels, _g, _p = self._dataset()
 
-        model = train_model(features, labels,
+        model, _metrics = train_model(features, labels,
                             model_path=str(tmp_path / "model.json"), epochs=2)
 
         score = model.predict([0.5] * FEATURE_COUNT)
@@ -361,7 +360,7 @@ class TestTrainModel:
 
         features, labels, group_ids, provenance = self._dataset()
 
-        train_model(features, labels, model_path=str(tmp_path / "model.json"),
+        _model, _metrics = train_model(features, labels, model_path=str(tmp_path / "model.json"),
                     epochs=2, group_ids=group_ids, provenance=provenance)
 
         holdout = json.loads((tmp_path / "eval_holdout.json").read_text(encoding='utf-8'))
@@ -374,7 +373,7 @@ class TestTrainModel:
 
         features, labels, group_ids, provenance = self._dataset()
 
-        train_model(features, labels, model_path=str(tmp_path / "model.json"),
+        _model, _metrics = train_model(features, labels, model_path=str(tmp_path / "model.json"),
                     epochs=2, group_ids=group_ids, provenance=provenance)
 
         adversarial = json.loads((tmp_path / "adversarial_eval.json").read_text(encoding='utf-8'))
@@ -386,7 +385,7 @@ class TestTrainModel:
 
         features, labels, _g, _p = self._dataset()
 
-        train_model(features, labels, model_path=str(tmp_path / "model.json"), epochs=2)
+        _model, _metrics = train_model(features, labels, model_path=str(tmp_path / "model.json"), epochs=2)
 
         assert not (tmp_path / "eval_holdout.json").exists()
         assert not (tmp_path / "adversarial_eval.json").exists()
@@ -396,7 +395,7 @@ class TestTrainModel:
 
         features, labels, group_ids, provenance = self._dataset()
 
-        train_model(features, labels, model_path=str(tmp_path / "model.json"),
+        _model, _metrics = train_model(features, labels, model_path=str(tmp_path / "model.json"),
                     epochs=2, group_ids=group_ids, provenance=provenance)
 
         assert sorted(p.name for p in tmp_path.iterdir()) == [

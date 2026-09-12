@@ -9,11 +9,27 @@
 # microguard/live is gated in the `live (Redis-backed)` job instead, which has a
 # Redis service container. Between the two jobs, every line is still covered by
 # a gate. Local runs use pyproject.toml and measure everything.
+#
+# The MLflow files are the same situation with one honest difference. This job
+# installs .[live,fastapi,flask,dashboard] and NOT the mlflow extra, so every
+# function in tracking.py but resolved_tracking_uri() -- and all of
+# api_mlflow.py -- raises ImportError before doing anything. Measuring them
+# here gated nothing and cost 35 missed statements: the total read 97.74%,
+# which only passed --cov-fail-under=98 because coverage.py rounds to the
+# display precision before comparing. Eight more uncovered statements anywhere
+# would have turned it red, with the real cause three files away.
+#
+# UNLIKE microguard/live, there is NO second job that installs the mlflow extra,
+# so these two files are currently UNGATED rather than gated elsewhere. That is
+# a known gap, not an oversight: closing it means adding `mlflow` to one job's
+# install line. Until then, do not read this omit as "covered somewhere else".
 [run]
 source = microguard
 omit =
     microguard/vulture_whitelist.py
     microguard/live/*
+    microguard/tracking.py
+    microguard/dashboard/api_mlflow.py
 
 [report]
 exclude_lines =

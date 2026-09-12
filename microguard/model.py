@@ -34,6 +34,11 @@ DEFAULT_MODEL_PATH = os.path.join(
 logger = logging.getLogger(__name__)
 
 
+class DegenerateModelError(RuntimeError):
+    """Training produced a constant classifier rather than a model."""
+
+
+
 class BotDetector:
     """Bot detection model using micrograd MLP.
     
@@ -78,17 +83,7 @@ class BotDetector:
                 f"Expected {self.NUM_FEATURES} features, got {len(features)}"
             )
         
-        # Normalize features if normalization params available
-        if self.norm_mins is not None and self.norm_maxs is not None:
-            normalized = []
-            for i, f in enumerate(features):
-                min_val = self.norm_mins[i]
-                max_val = self.norm_maxs[i]
-                if max_val > min_val:
-                    normalized.append((f - min_val) / (max_val - min_val))
-                else:
-                    normalized.append(0.0)
-            features = normalized
+        features = self.normalize(features)
         
         # Convert to micrograd Values
         x = [Value(f) for f in features]
@@ -109,6 +104,118 @@ class BotDetector:
         
         return max(0.0, min(1.0, score))
     
+    def normalize(self, features: list[float]) -> list[float]:
+        """Min-max the way training does, or pass the values through untouched.
+
+        The zero-range branch returns 0.5, matching
+        `training.train.normalize_features`. It used to return 0.0 here and
+        0.5 there, so any column that was constant across the training set
+        reached the network as a value it had never been trained on. One
+        column is constant in the shipped dataset (method_mismatch_count);
+        the divergence scales with however many there are.
+        """
+        if self.norm_mins is None or self.norm_maxs is None:
+            return list(features)
+
+        normalized = []
+        for i, value in enumerate(features):
+            min_val = self.norm_mins[i]
+            max_val = self.norm_maxs[i]
+            if max_val > min_val:
+                normalized.append((value - min_val) / (max_val - min_val))
+            else:
+                normalized.append(0.5)
+        return normalized
+
+    def has_live_hidden_units(self, features: list[list[float]]) -> bool:
+        """Can any hidden unit fire on any of these inputs?
+
+        A ReLU that never fires has zero gradient, so a network whose whole
+        hidden layer is silent on the training set is frozen: the weights
+        come back unchanged however long it runs. Worth asking before
+        fine-tuning, because fine-tuning reloads the same starting weights
+        on every retry and would otherwise fail identically five times.
+        """
+        for neuron in self.model.layers[0].neurons:
+            for row in features:
+                total = sum(w.data * x for w, x in zip(neuron.w, row)) + neuron.b.data
+                if total > 0:
+                    return True
+        return False
+
+    def train_until_it_learns(
+        self,
+        features: list[list[float]],
+        labels: list[float],
+        reset,
+        attempts: int = 5,
+        **train_kwargs,
+    ) -> int:
+        """Train, and start over if the result is a constant classifier.
+
+        Roughly a quarter of random initializations of this network collapse
+        on a 50-row correction set: with non-negative inputs and zero biases,
+        a hidden unit whose weights sum negative can never fire, and a ReLU
+        that never fires has no gradient, so the weights come back bit-for-bit
+        unchanged. More epochs do not help -- nothing is learning. Redrawing
+        does: 15/24 seeds succeed on the first try, 23/24 within five.
+
+        `reset` restores the starting point for the next attempt. Fresh
+        training redraws the network; fine-tuning reloads the baseline it is
+        supposed to be adapting.
+
+        Returns the attempt number that succeeded. Raises
+        DegenerateModelError if every attempt collapsed.
+        """
+        last: DegenerateModelError | None = None
+        for attempt in range(1, attempts + 1):
+            self.train(features, labels, **train_kwargs)
+            try:
+                self.check_not_degenerate(features, labels)
+            except DegenerateModelError as exc:
+                last = exc
+                if attempt < attempts:
+                    logger.warning(
+                        "training attempt %d/%d collapsed to a constant "
+                        "classifier; starting over", attempt, attempts,
+                    )
+                    reset()
+                continue
+            return attempt
+        assert last is not None
+        raise DegenerateModelError(
+            f"{attempts} training attempts all collapsed to a constant "
+            f"classifier. Last: {last}"
+        )
+
+    def check_not_degenerate(
+        self, features: list[list[float]], labels: list[float]
+    ) -> None:
+        """Raise unless the model separates the classes it was shown at all.
+
+        The bar is deliberately the lowest one that means anything: given
+        labels of both kinds, the predictions must also be of both kinds.
+        A model that answers every input identically has learned a constant,
+        and saving it produces in-range, meaningless scores with nothing
+        anywhere reporting a failure.
+        """
+        if not labels:
+            return
+        wanted_bot = any(label > 0.5 for label in labels)
+        wanted_human = any(label <= 0.5 for label in labels)
+        if not (wanted_bot and wanted_human):
+            return
+
+        predictions = self.predict_batch(features)
+        said_bot = sum(1 for p in predictions if p > 0.5)
+        if said_bot == 0 or said_bot == len(predictions):
+            verdict = "bot" if said_bot else "human"
+            raise DegenerateModelError(
+                f"training collapsed: the model labels all {len(predictions)} "
+                f"training sessions {verdict!r} while the labels contain both "
+                f"classes. Refusing to publish a constant classifier."
+            )
+
     def predict_batch(self, batch: list[list[float]]) -> list[float]:
         """Predict bot probability for a batch of feature vectors.
         

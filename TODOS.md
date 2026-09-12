@@ -67,7 +67,7 @@ complementary rather than alternatives — but only 0002 overlaps.
 **Trigger:** Before the signal-seam milestone starts, or any time the plan needs
 to shrink.
 
-## P3 — labeler.py rule-order debt
+## ~~P3 — labeler.py rule-order debt~~ (addressed 2026-09-13)
 
 **What:** `label_session` in `microguard/labeler.py` is a linear if-chain where
 the first matching rule wins, which makes rule *order* part of the semantics.
@@ -96,7 +96,7 @@ property, not something they misread.
 **Trigger:** When the chain passes roughly 250 lines, or when a rule genuinely
 needs to be reordered.
 
-## P3 — LiveSession and Session only duck-type
+## ~~P3 — LiveSession and Session only duck-type~~ (addressed 2026-09-13)
 
 **What:** `microguard/live/state.py`'s `LiveSession` and `microguard/features.py`'s
 `Session` are two unrelated classes that happen to expose the same attribute names.

@@ -28,27 +28,9 @@ from ..parser import LogEntry
 from .redis_events import RedisDecisionRecorder
 from .redis_store import RedisSessionStateStore
 from .runtime_config import RedisRuntimeConfig
-from .scorer import BLOCK_THRESHOLD_DEFAULT, LiveScorer
+from .scorer import BLOCK_THRESHOLD_DEFAULT, LiveScorer, fail_open_result
 
 logger = logging.getLogger(__name__)
-
-# Same shape as a real decision, so downstream consumers never special-case it.
-_FAIL_OPEN = {
-    "ip": "",
-    "label": "human",
-    "score": 0.0,
-    "model_score": 0.0,
-    "heuristic_label": "unknown",
-    "heuristic_confidence": 0.0,
-    "heuristic_reason": "scoring unavailable",
-    "reason": "scoring unavailable",
-    "request_count": 0,
-    "duration": 0.0,
-    "model_loaded": False,
-    # No threshold was consulted, and saying otherwise would let a dashboard
-    # plot a bar this decision never met.
-    "block_threshold": None,
-}
 
 # --- ASGI Middleware (FastAPI / Starlette) ---
 
@@ -115,7 +97,7 @@ class MicroguardASGI:
         except Exception:
             # Fail open: a Redis outage must not 500 every request.
             logger.exception("scoring failed, allowing request")
-            result = dict(_FAIL_OPEN)
+            result = fail_open_result()
 
         if result["label"] == "bot":
             body = json.dumps(result).encode()
@@ -206,7 +188,7 @@ class MicroguardWSGI:
         except Exception:
             # Fail open: a Redis outage must not 500 every request.
             logger.exception("scoring failed, allowing request")
-            result = dict(_FAIL_OPEN)
+            result = fail_open_result()
 
         if result["label"] == "bot":
             body = json.dumps(result).encode()

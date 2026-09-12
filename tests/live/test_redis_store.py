@@ -54,19 +54,19 @@ def _make_entry(ip="1.2.3.4", status=200, url="/api/test", **kwargs):
 
 def _record(store, n, ip="1.2.3.4", **kwargs):
     """Record n requests and return the session from the last call."""
-    session = None
+    snapshot = None
     for i in range(n):
-        session = store.record_request(
+        snapshot = store.record_request(
             ip, "Mozilla/5.0", _make_entry(ip=ip, url=f"/api/endpoint/{i}", **kwargs)
         )
-    return session
+    return snapshot.session
 
 
 # --- Appending ---
 
 
 def test_first_request_creates_the_session(store):
-    session = store.record_request("1.2.3.4", "Mozilla/5.0", _make_entry())
+    session = store.record_request("1.2.3.4", "Mozilla/5.0", _make_entry()).session
     assert session.ip == "1.2.3.4"
     assert session.user_agent == "Mozilla/5.0"
     assert session.request_count == 1
@@ -78,7 +78,7 @@ def test_appends_accumulate(store):
 
 def test_appends_preserve_order(store):
     _record(store, 4)
-    session = store.record_request("1.2.3.4", "Mozilla/5.0", _make_entry(url="/last"))
+    session = store.record_request("1.2.3.4", "Mozilla/5.0", _make_entry(url="/last")).session
     assert [e.url for e in session.requests] == [
         "/api/endpoint/0",
         "/api/endpoint/1",
@@ -90,7 +90,7 @@ def test_appends_preserve_order(store):
 
 def test_entry_fields_survive_the_round_trip(store):
     entry = _make_entry(url="/api/x", status=404, raw_line="GET /api/x HTTP/1.0")
-    session = store.record_request("1.2.3.4", "Mozilla/5.0", entry)
+    session = store.record_request("1.2.3.4", "Mozilla/5.0", entry).session
     got = session.requests[0]
     assert got.url == "/api/x"
     assert got.status == 404
@@ -107,7 +107,7 @@ def test_sessions_are_isolated_by_ip(store):
 def test_delete_removes_the_session(store):
     _record(store, 3)
     store.delete("1.2.3.4")
-    assert store.record_request("1.2.3.4", "Mozilla/5.0", _make_entry()).request_count == 1
+    assert store.record_request("1.2.3.4", "Mozilla/5.0", _make_entry()).session.request_count == 1
 
 
 # --- Concurrency: the reason this store is a LIST and not a JSON blob ---
@@ -138,7 +138,7 @@ def test_concurrent_appends_do_not_lose_requests(store):
         t.join(timeout=10)
 
     assert not errors, f"worker raised: {errors[0]!r}"
-    final = store.record_request("9.9.9.9", "Mozilla/5.0", _make_entry(ip="9.9.9.9"))
+    final = store.record_request("9.9.9.9", "Mozilla/5.0", _make_entry(ip="9.9.9.9")).session
     assert final.request_count == workers + 1
 
 
@@ -152,7 +152,7 @@ def test_history_is_capped(store):
 
 def test_cap_keeps_the_newest_entries(store):
     _record(store, MAX_SESSION_ENTRIES + 5)
-    session = store.record_request("1.2.3.4", "Mozilla/5.0", _make_entry(url="/newest"))
+    session = store.record_request("1.2.3.4", "Mozilla/5.0", _make_entry(url="/newest")).session
     assert session.requests[-1].url == "/newest"
     assert "/api/endpoint/0" not in [e.url for e in session.requests]
 
@@ -163,7 +163,7 @@ def test_cap_keeps_the_newest_entries(store):
 def test_session_expires(store):
     store.record_request("1.2.3.4", "Mozilla/5.0", _make_entry(), ttl_seconds=1)
     time.sleep(1.1)
-    assert store.record_request("1.2.3.4", "Mozilla/5.0", _make_entry()).request_count == 1
+    assert store.record_request("1.2.3.4", "Mozilla/5.0", _make_entry()).session.request_count == 1
 
 
 def test_every_append_refreshes_the_ttl(store, redis_client):
@@ -183,7 +183,7 @@ def test_a_v1_blob_does_not_break_the_v2_store(store, redis_client):
     WRONGTYPE. Sharing the key name would break every in-flight session on
     deploy, silently, because the entrypoints fail open."""
     redis_client.set("live:1.2.3.4", '{"ip": "1.2.3.4", "requests": []}')
-    session = store.record_request("1.2.3.4", "Mozilla/5.0", _make_entry())
+    session = store.record_request("1.2.3.4", "Mozilla/5.0", _make_entry()).session
     assert session.request_count == 1
     # the v1 key is untouched and expires on its own TTL
     assert redis_client.get("live:1.2.3.4") is not None
@@ -226,7 +226,7 @@ class TestSessionReconstruction:
         and the rate rule would read a sustained flood as slower the longer it
         ran. The clock must describe the retained window."""
         for i in range(MAX_SESSION_ENTRIES + 100):
-            session = store.record_request("5.5.5.5", "ua", _entry_at(i, ip="5.5.5.5"))
+            session = store.record_request("5.5.5.5", "ua", _entry_at(i, ip="5.5.5.5")).session
         # 300 requests spanning 299s, trimmed to the last 200 spanning 199s
         assert session.request_count == MAX_SESSION_ENTRIES
         assert session.duration == pytest.approx(MAX_SESSION_ENTRIES - 1)

@@ -346,6 +346,8 @@ both at once:
 | `mg:v1:hist` | HASH | bucket index `0`–`19` → count |
 | `mg:v1:blocked_ips` | ZSET | IP → times blocked, trimmed to the busiest 1000 |
 | `mg:v1:config` | HASH | `block_threshold` → float, absent when there is no override |
+| `mg:v1:signals:{ip}` | STRING | JSON of externally resolved signals for one actor. Written by `microguard signals`, expires with the session TTL |
+| `mg:v1:signals:heartbeat` | STRING | JSON `{ts, resolved, sources}` from the last refresh pass. **Never expires** — an absent key means the refresher has never run, which is a different problem from one that died |
 
 One decision is one pipeline: `LPUSH` + `LTRIM`, `HINCRBY` on the counters and
 the histogram, and `ZINCRBY` on the blocked IPs for a block. Reads are one

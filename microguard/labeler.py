@@ -8,6 +8,7 @@ import re
 
 from .features import BROWSER_UA_RE, Session
 from .parser import LogEntry
+from .signals import EMPTY_SIGNALS, Signals
 
 # High-confidence bot user agent patterns
 HIGH_CONFIDENCE_BOT_PATTERNS = [
@@ -107,6 +108,11 @@ SINGLE_ENDPOINT_API_RE = re.compile('|'.join(SINGLE_ENDPOINT_API_PATTERNS), re.I
 # browser page load, not a flood.
 MIN_RATE_WINDOW_S = 1.0
 MIN_RATE_REQUESTS = 5
+
+# AbuseIPDB reports a 0-100 confidence-of-abuse score. 75 is the value its own
+# docs treat as 'probably malicious'; below that the reports are thin enough
+# that a shared NAT address can accumulate one.
+THREAT_INTEL_ABUSE_THRESHOLD = 75.0
 
 # gRPC calls are routed as POST /package.Service/Method — two path segments,
 # method name capitalized by convention, no file extension.
@@ -225,7 +231,43 @@ def _check_botnet_signatures(session: Session) -> tuple[bool, str]:
     return False, ''
 
 
-def label_session(session: Session) -> tuple[str, float, str]:
+def _check_threat_intel_signals(signals: Signals) -> tuple[bool, float, str]:
+    """Verdict from externally resolved reputation data, if any applies.
+
+    Reads only from `signals`. It never looks anything up: this runs inline on
+    every nginx `auth_request`, and a lookup here would put a network round
+    trip in front of a real visitor.
+
+    Two gates before any source is consulted, both inside `is_promoted`:
+    the data must have actually been resolved (in a batch scan it never is),
+    and the deployment must have promoted that source out of observe-only.
+
+    Returns (matched, confidence, reason).
+    """
+    if signals.is_promoted("tor") and signals.tor_exit:
+        # Not 0.90. Real people use Tor, so this blocks only when the model
+        # agrees: compute_combined_score floors a confident bot at its own
+        # confidence, and the live threshold is a strict `> 0.85`.
+        return True, 0.85, "Tor exit node"
+
+    if (
+        signals.is_promoted("abuseipdb")
+        and signals.abuse_score is not None
+        and signals.abuse_score >= THREAT_INTEL_ABUSE_THRESHOLD
+    ):
+        return True, 0.90, f"AbuseIPDB abuse score {signals.abuse_score:.0f}"
+
+    # `signals.hosting_range` is deliberately not enforced. A datacenter IP is
+    # weak evidence on its own -- plenty of legitimate API clients live there --
+    # and spec 0002 left the combination rule open precisely because choosing
+    # it needs real traffic rather than a guess. It is resolved and recorded so
+    # the evidence can be gathered; it decides nothing until it can be.
+    return False, 0.0, ""
+
+
+def label_session(
+    session: Session, signals: Signals = EMPTY_SIGNALS
+) -> tuple[str, float, str]:
     """Label a session as 'bot', 'human', or 'automated-integration' with confidence.
 
     Returns:
@@ -298,7 +340,15 @@ def label_session(session: Session) -> tuple[str, float, str]:
     botnet_bot, botnet_reason = _check_botnet_signatures(session)
     if botnet_bot:
         return 'bot', 0.88, botnet_reason
-    
+
+    # 8. Externally resolved reputation, checked here rather than higher up.
+    # Chain order is semantics in this function, and everything above is a
+    # direct local observation of this actor's own traffic. A third-party
+    # lookup should not be able to relabel one of those.
+    ti_bot, ti_conf, ti_reason = _check_threat_intel_signals(signals)
+    if ti_bot:
+        return 'bot', ti_conf, f'threat intel: {ti_reason}'
+
     # === MEDIUM CONFIDENCE BOT SIGNALS (0.70-0.89) ===
     
     # 5. Very high request rate (>100 requests in session)

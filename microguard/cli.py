@@ -299,6 +299,48 @@ def main():
              'spoofable session key defeats detection.'
     )
 
+    # signals command — the slow tier, out of the request path
+    signals_parser = subparsers.add_parser(
+        'signals',
+        help='Resolve threat-intel signals out of band (needs Redis)'
+    )
+    signals_parser.add_argument(
+        '--redis-url',
+        default='redis://localhost:6379',
+        help='Redis connection URL (default: redis://localhost:6379)'
+    )
+    signals_parser.add_argument(
+        '--interval',
+        type=int,
+        default=300,
+        help='Seconds between refresh passes (default: 300)'
+    )
+    signals_parser.add_argument(
+        '--session-ttl',
+        type=int,
+        default=1800,
+        help='Expiry for each written signal record (default: 1800)'
+    )
+
+    # explain command — why one actor got the verdict it did
+    explain_parser = subparsers.add_parser(
+        'explain',
+        help='Explain the current verdict for one IP (needs Redis)'
+    )
+    explain_parser.add_argument('ip', help='Client IP to explain')
+    explain_parser.add_argument(
+        '--redis-url',
+        default='redis://localhost:6379',
+        help='Redis connection URL (default: redis://localhost:6379)'
+    )
+    explain_parser.add_argument(
+        '--promote',
+        default='',
+        help='Comma-separated signal sources to treat as enforced, e.g. '
+             '"tor,abuseipdb". Default: none, so every signal reads as '
+             'observe-only.'
+    )
+
     # dashboard command — API + built SPA on one port
     dashboard_parser = subparsers.add_parser(
         'dashboard',
@@ -570,6 +612,27 @@ def main():
             session_ttl=args.session_ttl,
             trust_forwarded_for=args.trust_forwarded_for,
         )
+
+    elif args.command == 'signals':
+        from .live.signals_runner import main as run_signals
+        run_signals(
+            redis_url=args.redis_url,
+            interval=args.interval,
+            session_ttl=args.session_ttl,
+        )
+
+    elif args.command == 'explain':
+        import redis as _redis
+
+        from .live.explain import explain_actor
+        promoted = frozenset(p.strip() for p in args.promote.split(',') if p.strip())
+        try:
+            client = _redis.Redis.from_url(args.redis_url, decode_responses=True)
+            client.ping()
+        except _redis.RedisError as exc:
+            print(f"❌ Error: cannot reach Redis at {args.redis_url}: {exc}", file=sys.stderr)
+            sys.exit(1)
+        print(explain_actor(client, args.ip, promoted=promoted))
 
     elif args.command == 'dashboard':
         from .dashboard.server import run_dashboard

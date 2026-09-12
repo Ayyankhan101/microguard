@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 
 import { getHealth } from './api/client';
+import { SignalStatus } from './components/SignalStatus';
 import { ThemeToggle } from './components/ThemeToggle';
 import { LiveTab } from './tabs/LiveTab';
 import { ModelTab } from './tabs/ModelTab';
@@ -61,8 +62,10 @@ export function App() {
 }
 
 /**
- * Two states degrade every decision silently: no model means heuristics only,
- * no Redis means the live tab is blind. Both belong somewhere always visible.
+ * Three states degrade every decision silently: no model means heuristics
+ * only, no Redis means the live tab is blind, and a signal refresher nobody
+ * started means every threat-intel signal is absent while looking exactly
+ * like a clean actor. All three belong somewhere always visible.
  */
 function HealthStatus() {
   const { data } = useQuery({ queryKey: ['health'], queryFn: getHealth });
@@ -77,6 +80,7 @@ function HealthStatus() {
       <span style={{ color: data.redis_connected ? 'var(--text-muted)' : 'var(--yellow)' }}>
         redis {data.redis_connected ? 'connected' : 'not connected'}
       </span>
+      <SignalStatus health={data.signals} />
       <span>v{data.version}</span>
     </div>
   );

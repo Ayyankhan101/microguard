@@ -23,7 +23,7 @@ from microguard.cli import scan_logfile
 from microguard.dashboard.app import create_app
 from microguard.events import InMemoryDecisionRecorder
 from microguard.live.scorer import LiveScorer
-from microguard.live.state import LiveSession, SessionStateStore
+from microguard.live.state import LiveSession, SessionSnapshot, SessionStateStore
 from microguard.parser import LogEntry, parse_file
 
 FIXTURE_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src", "api", "__fixtures__")
@@ -44,7 +44,8 @@ class _MemoryStore(SessionStateStore):
         session.requests.append(entry)
         session.start_time = session.requests[0].timestamp.timestamp()
         session.end_time = session.requests[-1].timestamp.timestamp()
-        return session
+        # No signals: a capture must not depend on a refresher having run.
+        return SessionSnapshot(session=session)
 
     def delete(self, ip):
         self._sessions.pop(ip, None)

@@ -42,33 +42,9 @@ from ..parser import LogEntry
 from .redis_events import RedisDecisionRecorder
 from .redis_store import RedisSessionStateStore
 from .runtime_config import RedisRuntimeConfig
-from .scorer import BLOCK_THRESHOLD_DEFAULT, LiveScorer
+from .scorer import BLOCK_THRESHOLD_DEFAULT, LiveScorer, fail_open_result
 
 logger = logging.getLogger(__name__)
-
-
-def _fail_open_result(ip: str) -> dict:
-    """The decision payload for a request we could not score.
-
-    Same shape as a real decision so downstream consumers never special-case
-    it; model_loaded False and the reason string say what happened.
-    """
-    return {
-        "ip": ip,
-        "label": "human",
-        "score": 0.0,
-        "model_score": 0.0,
-        "heuristic_label": "unknown",
-        "heuristic_confidence": 0.0,
-        "heuristic_reason": "scoring unavailable",
-        "reason": "scoring unavailable",
-        "request_count": 0,
-        "duration": 0.0,
-        "model_loaded": False,
-        # No threshold was consulted, and saying otherwise would let a
-        # dashboard plot a bar this decision never met.
-        "block_threshold": None,
-    }
 
 
 class CheckHandler(BaseHTTPRequestHandler):
@@ -108,7 +84,7 @@ class CheckHandler(BaseHTTPRequestHandler):
             # 500 for the visitor, so a Redis blip here would take the whole
             # site down. An unscored request beats an outage.
             logger.exception("scoring failed, allowing request")
-            failed = _fail_open_result(ip)
+            failed = fail_open_result(ip)
             self.send_response(200)
             self._send_score_headers(failed)
             self.end_headers()

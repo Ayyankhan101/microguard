@@ -10,10 +10,33 @@ import { z } from 'zod';
 export const LabelSchema = z.enum(['bot', 'human', 'automated-integration', 'unknown']);
 export type Label = z.infer<typeof LabelSchema>;
 
+export const SignalSourceSchema = z.object({
+  name: z.string(),
+  ok: z.boolean(),
+  entries: z.number(),
+  fetched_at: z.number().optional(),
+  error: z.string().optional(),
+});
+
+/**
+ * `running: false` carries a reason because the three ways the slow tier can
+ * be absent need different fixes: no redis, redis unreachable, or a refresher
+ * nobody ever started.
+ */
+export const SignalHealthSchema = z.object({
+  running: z.boolean(),
+  reason: z.string().optional(),
+  age_seconds: z.number().optional(),
+  resolved: z.number().optional(),
+  sources: z.array(SignalSourceSchema),
+});
+export type SignalHealth = z.infer<typeof SignalHealthSchema>;
+
 export const HealthSchema = z.object({
   version: z.string(),
   model_loaded: z.boolean(),
   redis_connected: z.boolean(),
+  signals: SignalHealthSchema,
 });
 export type Health = z.infer<typeof HealthSchema>;
 

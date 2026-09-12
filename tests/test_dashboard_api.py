@@ -470,3 +470,57 @@ class TestWithoutTheLiveExtra:
 
         assert isinstance(app.state.recorder, InMemoryDecisionRecorder)
         assert "redis is not installed" in caplog.text
+
+
+class TestSignalHealth:
+    """The signal panel reports a refresher nobody started.
+
+    Every threat-intel signal degrades to silently absent when the slow tier
+    is not running, and a silently absent signal looks exactly like a clean
+    actor. This is the only place that difference is visible.
+    """
+
+    def test_no_redis_reports_not_running(self):
+        from microguard.dashboard.api_health import _signal_health
+
+        assert _signal_health(None) == {
+            "running": False, "reason": "no redis", "sources": [],
+        }
+
+    def test_a_redis_that_raises_reports_unreachable(self):
+        from microguard.dashboard.api_health import _signal_health
+
+        class Broken:
+            def get(self, key):
+                raise RuntimeError("connection reset")
+
+        assert _signal_health(Broken())["reason"] == "redis unreachable"
+
+    def test_a_redis_with_no_heartbeat_reports_never_ran(self):
+        from microguard.dashboard.api_health import _signal_health
+
+        class Empty:
+            def get(self, key):
+                return None
+
+        assert _signal_health(Empty())["reason"] == "never ran"
+
+    def test_a_recorded_pass_reports_its_age_and_sources(self):
+        import json
+        import time as _time
+
+        from microguard.dashboard.api_health import _signal_health
+
+        class Beating:
+            def get(self, key):
+                return json.dumps({
+                    "ts": _time.time() - 30,
+                    "resolved": 4,
+                    "sources": [{"name": "tor", "ok": True, "entries": 2}],
+                })
+
+        health = _signal_health(Beating())
+        assert health["running"] is True
+        assert health["resolved"] == 4
+        assert 29 <= health["age_seconds"] <= 40
+        assert health["sources"][0]["name"] == "tor"

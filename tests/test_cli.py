@@ -725,3 +725,60 @@ class TestBareInvocationFallback:
             assert exc.code == 0
 
         assert 'usage:' in capsys.readouterr().out
+
+
+class TestSignalCommands:
+    """End-to-end coverage for `signals` and `explain` via main().
+
+    Redis is injected rather than required: these assert the CLI wiring —
+    argument parsing, dispatch, and the failure message an operator actually
+    sees — not the Redis behavior, which tests/live/ covers against a real
+    server.
+    """
+
+    def _run(self, monkeypatch, argv):
+        monkeypatch.setattr(sys, "argv", ["microguard", *argv])
+        return cli_module.main()
+
+    def test_explain_reports_a_redis_it_cannot_reach(self, monkeypatch, capsys):
+        """The common first failure. A traceback here tells an operator
+        nothing; the URL it tried tells them everything."""
+        with pytest.raises(SystemExit) as exc:
+            self._run(monkeypatch, ["explain", "1.2.3.4", "--redis-url", "redis://127.0.0.1:1"])
+
+        assert exc.value.code == 1
+        assert "cannot reach Redis" in capsys.readouterr().err
+
+    def test_explain_prints_the_explanation(self, monkeypatch, capsys):
+        calls = {}
+
+        def fake_explain(client, ip, promoted=frozenset()):
+            calls["ip"] = ip
+            calls["promoted"] = promoted
+            return "EXPLANATION BODY"
+
+        monkeypatch.setattr("microguard.live.explain.explain_actor", fake_explain)
+        monkeypatch.setattr(
+            "redis.Redis.from_url", lambda *a, **k: type("C", (), {"ping": lambda s: True})()
+        )
+
+        self._run(monkeypatch, ["explain", "9.9.9.9", "--promote", "tor, abuseipdb"])
+
+        assert calls["ip"] == "9.9.9.9"
+        assert calls["promoted"] == frozenset({"tor", "abuseipdb"})
+        assert "EXPLANATION BODY" in capsys.readouterr().out
+
+    def test_signals_passes_its_flags_through(self, monkeypatch):
+        seen = {}
+        monkeypatch.setattr(
+            "microguard.live.signals_runner.main",
+            lambda **kwargs: seen.update(kwargs),
+        )
+
+        self._run(monkeypatch, ["signals", "--interval", "45", "--session-ttl", "90"])
+
+        assert seen == {
+            "redis_url": "redis://localhost:6379",
+            "interval": 45,
+            "session_ttl": 90,
+        }

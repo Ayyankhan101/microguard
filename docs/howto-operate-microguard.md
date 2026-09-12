@@ -18,6 +18,8 @@ restarts or retrains itself. Nothing runs unless you run it.
 | Blocked-IP tracking caps at 1000 addresses | Noticing that anything is wrong |
 | Threshold changes reach every process in ~5s | Resetting the cumulative counters |
 | Redis failure mid-flight fails open | Exporting deny lists |
+| Signal records expire with the session | Running `microguard signals` |
+| A dead feed falls back to its last cache | Noticing a feed has been dead for a week |
 
 The counters in `mg:v1:counters` and `mg:v1:hist` are cumulative for the life of
 the Redis instance and never expire. That is deliberate — see
@@ -26,7 +28,7 @@ accumulates until you clear it.
 
 ## Is it running?
 
-Two processes matter. The check server is the one in the request path:
+Three processes matter now. The check server is the one in the request path:
 
 ```bash
 microguard serve
@@ -110,6 +112,41 @@ that is obviously broken. Treat it as an alert, not as noise.
 
 Fix Redis. The check server recovers on its own once Redis answers again — no
 restart needed, because it reconnects per request.
+
+### Everything is allowed, and no decision mentions a signal
+
+**The signal refresher is not running.** Threat-intel signals are absent, and
+an actor with no resolved signals looks exactly like a clean one. Nothing
+fails, nothing warns, and no rule that depends on a signal will ever fire.
+
+```bash
+redis-cli GET mg:v1:signals:heartbeat
+# (nil)  -> it has never run against this Redis
+```
+
+The dashboard sidebar says `signals never ran` in amber. Start it:
+
+```bash
+microguard signals
+```
+
+It resolves signals only for actors that already have a live session, so the
+keyspace is bounded by real traffic, and each record expires with the session
+it describes. If the process dies, records go stale and then expire, and the
+check server simply scores without them — degraded, not down. That is why the
+fetches live here and not in the check server: a slow feed inside `/check`
+would be a 500 for every visitor.
+
+A source can also fail while the process is healthy, which is the case worth
+watching for. The sidebar reports it per source:
+
+```bash
+curl -s http://127.0.0.1:8500/api/health | python3 -m json.tool
+```
+
+`signals.sources[].ok` false with an `error` means that one feed is serving
+from a stale cache, or from nothing. Every signal degrades silently by design,
+so this readout is the only place it surfaces.
 
 ### Everything is allowed, and every model score is 0.00
 
@@ -239,6 +276,7 @@ Nothing schedules this. Run it when you think of it:
 ```bash
 curl -s http://127.0.0.1:8500/api/health
 curl -s http://127.0.0.1:8500/api/live/stats | python3 -m json.tool | head -8
+microguard explain <an-ip-you-saw-blocked>
 ```
 
 What to look for:
@@ -250,6 +288,8 @@ What to look for:
   no longer matches your traffic.
 - `total` not moving between checks → nothing is being scored. Traffic is
   bypassing microguard, or the check server is down.
+- `signals.running` false, or any source `ok: false` → threat-intel rules
+  are quietly contributing nothing.
 
 ## Appendix: running it under supervision
 

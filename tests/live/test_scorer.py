@@ -7,6 +7,7 @@ import pytest
 
 from microguard.live.scorer import LiveScorer, _load_model
 from microguard.parser import LogEntry
+from microguard.signals import Signals
 
 
 def _make_entry(ip="1.2.3.4", status=200, url="/api/test", ua="Mozilla/5.0", **kwargs):
@@ -245,6 +246,10 @@ EXPECTED_KEYS = {
     "ip", "label", "score", "model_score", "heuristic_label",
     "heuristic_confidence", "heuristic_reason", "request_count",
     "duration", "model_loaded", "reason", "block_threshold",
+    # What the external signals said, and which of them were allowed to decide.
+    # An unpromoted signal changes no verdict but is still recorded, which is
+    # the only way an operator can see what enforcing it would cost.
+    "signals",
 }
 
 
@@ -410,14 +415,66 @@ class TestRuntimeThreshold:
 def test_fail_open_payloads_match_the_real_decision_shape(store):
     """Both entrypoints hand back a canned payload when scoring blows up.
 
-    They only avoid downstream special-casing if that payload has the same
-    keys as a real decision, so this pins the two together rather than
-    trusting the comment above each one.
+    It only avoids downstream special-casing if that payload has the same keys
+    as a real decision, so this pins the two together rather than trusting the
+    comment above it. Both entrypoints now build it from one function, which is
+    what keeps a key added to the real decision from being added to only one of
+    them -- so this asserts the builder, and that both callers use it.
     """
-    from microguard.live.middleware import _FAIL_OPEN
-    from microguard.live.server import _fail_open_result
+    from microguard.live import middleware, server
+    from microguard.live.scorer import fail_open_result
 
     real = LiveScorer(store).score_request(_make_entry())
 
-    assert set(_fail_open_result("1.2.3.4")) == set(real)
-    assert set(_FAIL_OPEN) == set(real)
+    assert set(fail_open_result("1.2.3.4")) == set(real)
+    assert middleware.fail_open_result is fail_open_result
+    assert server.fail_open_result is fail_open_result
+
+
+class TestSignalPromotion:
+    """Decision 10A: a resolved signal is recorded but cannot decide a verdict
+    until the deployment promotes its source."""
+
+    def test_an_unpromoted_signal_is_recorded_but_does_not_block(self, store):
+        store.set_signals("1.2.3.4", Signals(resolved=True, tor_exit=True))
+        result = LiveScorer(store).score_request(_make_entry())
+
+        assert result["label"] == "human"
+        assert result["signals"] == {
+            "resolved": True,
+            "tor_exit": True,
+            "hosting_range": False,
+            "abuse_score": None,
+            "promoted": [],
+        }
+
+    def test_a_promoted_signal_decides(self, store):
+        store.set_signals("1.2.3.4", Signals(resolved=True, abuse_score=99.0))
+        scorer = LiveScorer(store, promoted_source=lambda: frozenset({"abuseipdb"}))
+
+        result = scorer.score_request(_make_entry())
+
+        assert result["label"] == "bot"
+        assert "AbuseIPDB" in result["heuristic_reason"]
+        assert result["signals"]["promoted"] == ["abuseipdb"]
+
+    def test_unresolved_signals_report_only_that(self, store):
+        """No signal data for this actor. The record must say so rather than
+        reporting a clean lookup that never happened."""
+        result = LiveScorer(store).score_request(_make_entry())
+        assert result["signals"] == {"resolved": False}
+
+    def test_a_failing_promotion_source_promotes_nothing(self, store, caplog):
+        """An unreachable config store must not start enforcing a signal
+        nobody approved. Same fail-safe direction as the threshold source."""
+        def boom() -> frozenset[str]:
+            raise RuntimeError("config store unreachable")
+
+        store.set_signals("1.2.3.4", Signals(resolved=True, tor_exit=True))
+        scorer = LiveScorer(store, promoted_source=boom)
+
+        result = scorer.score_request(_make_entry())
+
+        assert result["label"] == "human"
+        assert result["signals"]["promoted"] == []
+        assert "promotion source failed" in caplog.text

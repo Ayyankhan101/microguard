@@ -3,6 +3,55 @@
 ## [Unreleased]
 
 ### Added
+- **A signal seam, so external reputation data can reach the rules without
+  reaching the request path.** `label_session` now takes a `signals` argument
+  and stays a pure function of its arguments. It is called inline on every
+  nginx `auth_request` (`live/scorer.py`), so a lookup performed inside a rule
+  would put a network round trip in front of a real visitor, where nginx turns
+  slowness into a 500. Signals are resolved before the call instead.
+  - `microguard/signals.py` is stdlib-only and lives outside `live/` on
+    purpose: `live/__init__.py` raises ImportError without redis-py, and
+    `labeler.py` is on the `microguard scan` path. Two tests spawn a fresh
+    interpreter and assert that importing either module leaves `redis` out of
+    `sys.modules`.
+  - `Signals.resolved` separates "we looked and found nothing" from "we never
+    looked". In a batch scan nothing is ever resolved, so a rule reading
+    absence as evidence would label every session in every log file a bot.
+  - `Signals.promoted` carries the deployment's opt-in list. A resolved but
+    unpromoted signal is recorded on the decision and decides nothing, so an
+    operator can measure what enforcing it would cost before enforcing it.
+- **`microguard signals`** — the slow tier, in its own process. Fetches the Tor
+  exit-node list and AWS prefix ranges from their published keyless endpoints,
+  caches them with a stale-on-failure fallback, and resolves signals only for
+  actors that already have a live session. Writes a heartbeat that never
+  expires, so "never started" stays distinguishable from "died an hour ago".
+- **`microguard explain <ip>`** — the session, the resolved signals, their
+  promotion state, and the rule that decided the verdict. Read-only: it reads
+  the session back rather than recording a request, because diagnosis must not
+  change the thing being diagnosed.
+- **Signal health in the dashboard sidebar.** Every signal here fails silently
+  by design, and a source that has been dead for a week looks identical to a
+  clean actor. The sidebar names the source and the reason.
+
+### Changed
+- `SessionStateStore.record_request` returns a `SessionSnapshot` (session plus
+  signals) rather than a bare session, so the signals read rides along in the
+  existing pipeline. On a remote Redis that is one 15ms wait on the
+  `auth_request` path instead of two. A test asserts exactly one pipeline
+  execution per scored request, and another asserts the in-memory test double
+  and the real store return the same shape — a drifted double would make every
+  live test pass against something Redis never produces.
+- `extract_features` now runs when a model **or** a recorder is present rather
+  than only when a model is loaded. It is roughly 2ms and the dominant
+  per-request cost, so a deployment with neither no longer pays for a vector
+  nothing reads.
+
+### Fixed
+- The fail-open decision payload was duplicated verbatim in `live/server.py`
+  and `live/middleware.py` — twelve identical keys and the same comment. Both
+  now build it from one function. A payload missing a key the dashboard reads
+  fails during an outage, which is the worst possible time to find it.
+
 - **Test coverage raised from 77% to 100%**, 502 tests to 776. The number is
   the side effect; the work was fixing tests that could not fail and covering
   detection logic that had never run.

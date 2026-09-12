@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import Callable
+from dataclasses import replace
 from pathlib import Path
 
 from ..events import DecisionRecorder
@@ -18,6 +19,7 @@ from ..labeler import label_session
 from ..model import DEFAULT_MODEL_PATH, BotDetector
 from ..parser import LogEntry
 from ..scoring import BLOCK_THRESHOLD_DEFAULT, compute_combined_score
+from ..signals import Signals
 from .state import SessionStateStore
 
 logger = logging.getLogger(__name__)
@@ -53,6 +55,53 @@ def _load_model(model_path: str | Path | None = None) -> BotDetector | None:
         return None
 
 
+def fail_open_result(ip: str = "") -> dict:
+    """The decision payload for a request that could not be scored.
+
+    One builder, not one copy per entrypoint. The keys must match a real
+    decision exactly so downstream consumers never special-case a failure --
+    `model_loaded` False and the reason string are what say what happened.
+    Two hand-maintained copies of this dict drifted the moment a key was added
+    to the real decision, and a fail-open payload missing a key the dashboard
+    reads fails during an outage, which is the worst time to find it.
+    """
+    return {
+        "ip": ip,
+        "label": "human",
+        "score": 0.0,
+        "model_score": 0.0,
+        "heuristic_label": "unknown",
+        "heuristic_confidence": 0.0,
+        "heuristic_reason": "scoring unavailable",
+        "reason": "scoring unavailable",
+        "request_count": 0,
+        "duration": 0.0,
+        "model_loaded": False,
+        # No threshold was consulted, and saying otherwise would let a
+        # dashboard plot a bar this decision never met.
+        "block_threshold": None,
+        "signals": _signal_summary(None),
+    }
+
+
+def _signal_summary(signals: Signals | None) -> dict:
+    """The signal state worth keeping on a decision record.
+
+    `promoted` is included because the same signal value means different
+    things depending on whether it was allowed to decide, and a record that
+    omitted it could not explain its own verdict later.
+    """
+    if signals is None or not signals.resolved:
+        return {"resolved": False}
+    return {
+        "resolved": True,
+        "tor_exit": signals.tor_exit,
+        "hosting_range": signals.hosting_range,
+        "abuse_score": signals.abuse_score,
+        "promoted": sorted(signals.promoted),
+    }
+
+
 class LiveScorer:
     """Scores requests against live session state.
 
@@ -74,6 +123,7 @@ class LiveScorer:
         short_circuit_label: str = "automated-integration",
         recorder: DecisionRecorder | None = None,
         threshold_source: Callable[[], float | None] = lambda: None,
+        promoted_source: Callable[[], frozenset[str]] = frozenset,
     ):
         self._store = store
         self._model = _load_model(model_path)
@@ -82,6 +132,7 @@ class LiveScorer:
         self._short_circuit_label = short_circuit_label
         self._recorder = recorder
         self._threshold_source = threshold_source
+        self._promoted_source = promoted_source
 
     @property
     def model_loaded(self) -> bool:
@@ -116,14 +167,16 @@ class LiveScorer:
         # to score. The old get/mutate/set pair lost concurrent appends from
         # the same actor, which undercounted request_count under exactly the
         # load the rate and timing rules are there to catch.
-        session = self._store.record_request(
+        snapshot = self._store.record_request(
             entry.ip,
             entry.user_agent,
             entry,
             ttl_seconds=self._session_ttl,
         )
+        session = snapshot.session
+        signals = self._promote(snapshot.signals)
 
-        h_label, h_conf, h_reason = label_session(session)  # type: ignore[arg-type]
+        h_label, h_conf, h_reason = label_session(session, signals)  # type: ignore[arg-type]
 
         # Short-circuit for automated integrations
         if h_label == self._short_circuit_label:
@@ -137,12 +190,15 @@ class LiveScorer:
                 h_reason=f"automated-integration (not blocked): {h_reason}",
             )
 
-        # Model prediction (if available)
-        if self._model is not None:
+        # Features are needed by the model AND by the recorder, which keeps
+        # them so an operator's later correction trains on the vector the
+        # decision was actually made from. Computing them is roughly 2ms and is
+        # the dominant per-request cost, so skip it when nothing consumes it:
+        # no model and no recorder means no consumer.
+        features = None
+        if self._model is not None or self._recorder is not None:
             features = extract_features(session)  # type: ignore[arg-type]
-            model_score = self._model.predict(features)
-        else:
-            model_score = 0.0
+        model_score = self._model.predict(features) if self._model is not None and features else 0.0
 
         threshold = self._threshold()
         combined = compute_combined_score(h_label, h_conf, model_score)
@@ -162,7 +218,27 @@ class LiveScorer:
             h_label=h_label,
             h_conf=h_conf,
             h_reason=h_reason,
+            signals=signals,
         )
+
+    def _promote(self, signals: Signals) -> Signals:
+        """Attach the deployment's promotion list to this actor's signals.
+
+        Promotion is deployment configuration, not per-actor data, so the store
+        does not carry it. Read per request, like the threshold, so an operator
+        can promote a signal from the dashboard without restarting and dropping
+        every in-flight session. A failing source promotes nothing, which keeps
+        an unreachable config store from silently enforcing a signal nobody
+        approved.
+        """
+        if not signals.resolved:
+            return signals
+        try:
+            promoted = self._promoted_source()
+        except Exception:
+            logger.exception("promotion source failed, treating every signal as observe-only")
+            return signals
+        return replace(signals, promoted=promoted) if promoted else signals
 
     def _threshold(self) -> float:
         """The threshold this request is judged against.
@@ -191,6 +267,7 @@ class LiveScorer:
         h_conf: float,
         h_reason: str,
         threshold: float | None = None,
+        signals: Signals | None = None,
     ) -> dict:
         """Assemble the decision payload. One place, so the short-circuit and
         the scored path cannot report different shapes — and so recording
@@ -211,6 +288,10 @@ class LiveScorer:
             "block_threshold": self._block_threshold if threshold is None else threshold,
             # Kept for callers reading the old four-key shape.
             "reason": h_reason,
+            # The observe half of observe-until-promoted: an unpromoted signal
+            # decides nothing, but it still travels into the record so an
+            # operator can see what it would have done before enforcing it.
+            "signals": _signal_summary(signals),
         }
         self._record(result)
         return result

@@ -212,6 +212,7 @@ class TestRunServer:
             block_threshold=0.7,
             session_ttl=600,
             trust_forwarded_for=True,
+            deployment_id=None,
         )
 
         MockRedis.from_url.assert_called_once_with("redis://otherhost:6380", decode_responses=True)
@@ -239,6 +240,7 @@ class TestMain:
             block_threshold=0.85,
             session_ttl=1800,
             trust_forwarded_for=False,
+            deployment_id=None,
         )
 
     @patch("microguard.live.server.run_server")
@@ -264,6 +266,7 @@ class TestMain:
             block_threshold=0.7,
             session_ttl=600,
             trust_forwarded_for=True,
+            deployment_id=None,
         )
 
 

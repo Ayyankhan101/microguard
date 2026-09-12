@@ -250,6 +250,11 @@ EXPECTED_KEYS = {
     # An unpromoted signal changes no verdict but is still recorded, which is
     # the only way an operator can see what enforcing it would cost.
     "signals",
+    # What a later correction points at, and what it trains on. The live
+    # session expires long before anyone reviews a block, so the vector has to
+    # travel with the decision rather than be recomputed.
+    "id",
+    "features",
 }
 
 

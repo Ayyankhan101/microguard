@@ -782,3 +782,81 @@ class TestSignalCommands:
             "interval": 45,
             "session_ttl": 90,
         }
+
+
+class TestRetrainCommand:
+    """`microguard retrain` end to end via main().
+
+    Both safety rails are refusals, not crashes: an operator who ran a retrain
+    needs to know it did not happen and what would change that, rather than
+    reading a traceback.
+    """
+
+    def _run(self, monkeypatch, argv):
+        monkeypatch.setattr(sys, "argv", ["microguard", *argv])
+        return cli_module.main()
+
+    def test_it_reports_success_and_the_rollback(self, monkeypatch, capsys, tmp_path):
+        written = tmp_path / "prod_model.json"
+        monkeypatch.setattr(
+            "microguard.training.online_update.retrain_deployment_model",
+            lambda **kwargs: written,
+        )
+
+        self._run(monkeypatch, ["retrain", "--deployment-id", "prod"])
+
+        out = capsys.readouterr().out
+        assert str(written) in out
+        assert "baseline was not modified" in out
+        assert "deleting that file" in out
+
+    def test_too_few_corrections_exits_1_with_the_reason(self, monkeypatch, capsys):
+        from microguard.training.online_update import InsufficientFeedbackError
+
+        def refuse(**kwargs):
+            raise InsufficientFeedbackError("has 3 correction(s), need at least 50")
+
+        monkeypatch.setattr(
+            "microguard.training.online_update.retrain_deployment_model", refuse
+        )
+
+        with pytest.raises(SystemExit) as exc:
+            self._run(monkeypatch, ["retrain", "--deployment-id", "prod"])
+
+        assert exc.value.code == 1
+        assert "need at least 50" in capsys.readouterr().err
+
+    def test_a_skewed_set_exits_1_with_the_reason(self, monkeypatch, capsys):
+        from microguard.training.online_update import ClassImbalanceError
+
+        def refuse(**kwargs):
+            raise ClassImbalanceError("corrections are 100% one class")
+
+        monkeypatch.setattr(
+            "microguard.training.online_update.retrain_deployment_model", refuse
+        )
+
+        with pytest.raises(SystemExit) as exc:
+            self._run(monkeypatch, ["retrain", "--deployment-id", "prod"])
+
+        assert exc.value.code == 1
+        assert "one class" in capsys.readouterr().err
+
+    def test_the_flags_reach_the_trainer(self, monkeypatch, tmp_path):
+        seen = {}
+        monkeypatch.setattr(
+            "microguard.training.online_update.retrain_deployment_model",
+            lambda **kwargs: seen.update(kwargs) or tmp_path / "m.json",
+        )
+
+        self._run(monkeypatch, [
+            "retrain", "--deployment-id", "prod",
+            "--feedback-dir", str(tmp_path), "--min-examples", "7", "--epochs", "3",
+        ])
+
+        assert seen == {
+            "deployment_id": "prod",
+            "feedback_dir": str(tmp_path),
+            "min_examples": 7,
+            "epochs": 3,
+        }

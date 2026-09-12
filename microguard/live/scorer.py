@@ -9,6 +9,9 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
+import time
+import uuid
 from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
@@ -81,6 +84,12 @@ def fail_open_result(ip: str = "") -> dict:
         # dashboard plot a bar this decision never met.
         "block_threshold": None,
         "signals": _signal_summary(None),
+        # Identified like any other row so the dashboard can key on it, but
+        # with no features: nothing was scored, so there is no vector a
+        # correction could train on. Feedback refuses these rather than
+        # training on a placeholder.
+        "id": uuid.uuid4().hex,
+        "features": None,
     }
 
 
@@ -124,15 +133,111 @@ class LiveScorer:
         recorder: DecisionRecorder | None = None,
         threshold_source: Callable[[], float | None] = lambda: None,
         promoted_source: Callable[[], frozenset[str]] = frozenset,
+        deployment_id: str | None = None,
+        feedback_dir: str | Path | None = None,
+        reload_interval: float = 5.0,
     ):
         self._store = store
-        self._model = _load_model(model_path)
+        self._baseline_path = Path(model_path) if model_path else Path(DEFAULT_MODEL_PATH)
+        self._deployment_id = deployment_id
+        self._feedback_dir = feedback_dir
+        self._reload_interval = reload_interval
+        # One shared scorer serves every request thread (server.py sets it as a
+        # class attribute), so the swap has to be guarded.
+        self._model_lock = threading.Lock()
+        self._reloaded_at = 0.0
+        self._active_mtime: float | None = None
+        self.active_model_path: Path = self._baseline_path
+        # Set when a candidate model could not be loaded and the previous one
+        # was kept. Surfaced rather than only logged: the failure it replaces
+        # was silent, and a silent model is indistinguishable from a working
+        # one in every score it produces.
+        self.model_refused: str | None = None
+        self._model = None
+        self._select_model()
         self._block_threshold = block_threshold
         self._session_ttl = session_ttl
         self._short_circuit_label = short_circuit_label
         self._recorder = recorder
         self._threshold_source = threshold_source
         self._promoted_source = promoted_source
+
+    def _candidate_path(self) -> Path:
+        """The model this process should be using right now.
+
+        A deployment model only applies when this process asked for one: a
+        scorer started without a deployment id must never pick one up.
+        """
+        if self._deployment_id is None:
+            return self._baseline_path
+        from ..training.online_update import deployment_model_path
+
+        candidate = deployment_model_path(self._deployment_id, self._feedback_dir)
+        return candidate if candidate.exists() else self._baseline_path
+
+    def _load_active(self):
+        """Load whatever `_candidate_path` points at. Test seam."""
+        return _load_model(self.active_model_path)
+
+    def _select_model(self) -> None:
+        """Pick up a changed model, or keep the one that works.
+
+        Called per request, but the filesystem is only consulted once per
+        `reload_interval` -- a stat() on the path nginx waits on is cheap and
+        not free, and the file changes a few times a week at most. Same cache
+        shape as RedisRuntimeConfig uses for the threshold.
+        """
+        if (
+            self._model is not None
+            and (time.monotonic() - self._reloaded_at) < self._reload_interval
+        ):
+            return
+
+        with self._model_lock:
+            # Re-check inside the lock: several request threads can arrive at
+            # an expired interval together, and only one should do the load.
+            if self._model is not None and (time.monotonic() - self._reloaded_at) < self._reload_interval:
+                return
+
+            candidate = self._candidate_path()
+            try:
+                mtime = candidate.stat().st_mtime
+            except OSError:
+                mtime = None
+            if (
+                self._model is not None
+                and candidate == self.active_model_path
+                and mtime == self._active_mtime
+            ):
+                self._reloaded_at = time.monotonic()
+                return
+
+            previous_path = self.active_model_path
+            self.active_model_path = candidate
+            loaded = self._load_active()
+            if loaded is None and self._model is not None:
+                # Decision 6A. The old behavior here was to fall through to
+                # model_score 0.0, which collapses every blend to the heuristic
+                # alone and produces in-range, meaningless scores forever after
+                # -- with nothing anywhere saying why.
+                self.model_refused = str(candidate)
+                self.active_model_path = previous_path
+                logger.error(
+                    "model at %s could not be loaded - refused the swap and kept %s",
+                    candidate, previous_path,
+                )
+                self._reloaded_at = time.monotonic()
+                return
+
+            self._model = loaded
+            self._active_mtime = mtime
+            self.model_refused = None
+            # Stamped after the load, not before: the interval measures time
+            # since a COMPLETED check, so a slow or failed load does not buy
+            # itself a free window. It also makes the double-check above
+            # meaningful -- threads that queued on the lock while this ran see
+            # a fresh timestamp and skip the work instead of repeating it.
+            self._reloaded_at = time.monotonic()
 
     @property
     def model_loaded(self) -> bool:
@@ -175,8 +280,19 @@ class LiveScorer:
         )
         session = snapshot.session
         signals = self._promote(snapshot.signals)
+        self._select_model()
 
         h_label, h_conf, h_reason = label_session(session, signals)  # type: ignore[arg-type]
+
+        # Computed before the short-circuit, not after: an
+        # automated-integration verdict is still a verdict an operator can
+        # disagree with, and a correction needs the vector the decision was
+        # actually made from. Roughly 2ms and the dominant per-request cost, so
+        # skipped entirely when nothing consumes it -- no model and no recorder
+        # means no consumer.
+        features = None
+        if self._model is not None or self._recorder is not None:
+            features = extract_features(session)  # type: ignore[arg-type]
 
         # Short-circuit for automated integrations
         if h_label == self._short_circuit_label:
@@ -190,15 +306,11 @@ class LiveScorer:
                 h_reason=f"automated-integration (not blocked): {h_reason}",
             )
 
-        # Features are needed by the model AND by the recorder, which keeps
-        # them so an operator's later correction trains on the vector the
-        # decision was actually made from. Computing them is roughly 2ms and is
-        # the dominant per-request cost, so skip it when nothing consumes it:
-        # no model and no recorder means no consumer.
-        features = None
-        if self._model is not None or self._recorder is not None:
-            features = extract_features(session)  # type: ignore[arg-type]
-        model_score = self._model.predict(features) if self._model is not None and features else 0.0
+        model_score = (
+            self._model.predict(features)
+            if self._model is not None and features is not None
+            else 0.0
+        )
 
         threshold = self._threshold()
         combined = compute_combined_score(h_label, h_conf, model_score)
@@ -219,6 +331,7 @@ class LiveScorer:
             h_conf=h_conf,
             h_reason=h_reason,
             signals=signals,
+            features=features,
         )
 
     def _promote(self, signals: Signals) -> Signals:
@@ -268,6 +381,7 @@ class LiveScorer:
         h_reason: str,
         threshold: float | None = None,
         signals: Signals | None = None,
+        features: list[float] | None = None,
     ) -> dict:
         """Assemble the decision payload. One place, so the short-circuit and
         the scored path cannot report different shapes — and so recording
@@ -292,6 +406,15 @@ class LiveScorer:
             # decides nothing, but it still travels into the record so an
             # operator can see what it would have done before enforcing it.
             "signals": _signal_summary(signals),
+            # Identifies this decision so an operator's later correction can
+            # name it. Without one, a dashboard row is an anonymous blob in a
+            # LIST and there is nothing to point at.
+            "id": uuid.uuid4().hex,
+            # The vector this decision was actually made from. Kept here rather
+            # than recomputed at feedback time, because the live session is a
+            # 200-entry sliding window on a 1800s TTL: by the time anyone
+            # reviews a block, the inputs that produced it are gone.
+            "features": features,
         }
         self._record(result)
         return result

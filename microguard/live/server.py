@@ -241,6 +241,7 @@ def run_server(
     block_threshold: float = BLOCK_THRESHOLD_DEFAULT,
     session_ttl: int = 1800,
     trust_forwarded_for: bool = False,
+    deployment_id: str | None = None,
 ):
     """Start the check server."""
     r = redis.Redis.from_url(redis_url, decode_responses=True)
@@ -262,6 +263,9 @@ def run_server(
         # Without this, decision 10A's observe-only posture is permanent:
         # every signal is measured and none can ever decide anything.
         promoted_source=config.promoted_signals,
+        # None means the shipped baseline, always. A deployment model must
+        # never be picked up by a process that did not ask for one.
+        deployment_id=deployment_id,
     )
 
     CheckHandler.scorer = scorer
@@ -297,6 +301,7 @@ def run_server(
     # below is heuristics-only. Say so where an operator will actually see it.
     print(f"  model: {'loaded' if scorer.model_loaded else 'NOT LOADED (heuristics only)'}")
     print(f"  trust X-Forwarded-For: {trust_forwarded_for}")
+    print(f"  model in use: {scorer.active_model_path}")
     # Said up front, because this server looks dead when it is working: it
     # logs nothing per request and serves one machine-facing route.
     print("  web UI: not here - run 'microguard dashboard' (this serves nginx)")
@@ -316,6 +321,7 @@ def main():
     parser.add_argument("--redis-url", default="redis://localhost:6379")
     parser.add_argument("--block-threshold", type=float, default=BLOCK_THRESHOLD_DEFAULT)
     parser.add_argument("--session-ttl", type=int, default=1800)
+    parser.add_argument("--deployment-id", default=None)
     parser.add_argument(
         "--trust-forwarded-for",
         action="store_true",
@@ -329,6 +335,7 @@ def main():
         block_threshold=args.block_threshold,
         session_ttl=args.session_ttl,
         trust_forwarded_for=args.trust_forwarded_for,
+        deployment_id=args.deployment_id,
     )
 
 

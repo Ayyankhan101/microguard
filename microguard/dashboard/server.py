@@ -16,6 +16,8 @@ def run_dashboard(
     redis_url: str = "redis://localhost:6379",
     allow_config_writes: bool = False,
     token: str | None = None,
+    deployment_id: str | None = None,
+    feedback_dir: str | None = None,
 ) -> None:
     """Start the dashboard.
 
@@ -31,6 +33,8 @@ def run_dashboard(
         allow_config_writes=allow_config_writes,
         static_dir=STATIC_DIR,
         token=token,
+        deployment_id=deployment_id,
+        feedback_dir=feedback_dir,
     )
 
     print(f"microguard dashboard on http://{host}:{port}")

@@ -5,6 +5,8 @@ scan/model engine, so a shape change in scan_logfile() or model.json shows up
 here rather than in the browser.
 """
 
+import json
+
 import pytest
 
 fastapi_testclient = pytest.importorskip("fastapi.testclient")
@@ -617,3 +619,119 @@ class TestSignalPromotionEndpoint:
         writable_client.put("/api/live/config", json={"block_threshold": 0.7})
 
         assert writable_client.get("/api/live/config").json()["promoted_signals"] == ["tor"]
+
+
+class TestFeedbackEndpoint:
+    """Recording a correction is open by default; acting on it is not.
+
+    Decision 8A. A recorded correction changes nothing until someone
+    deliberately retrains, and the safety rails refuse thin or skewed data at
+    that point. Gating the recording instead would mean the button is dark on
+    a default install, and min_examples=50 makes thin collection equivalent to
+    no feature at all.
+    """
+
+    @pytest.fixture()
+    def feedback_client(self, tmp_path):
+        from microguard.dashboard.app import create_app
+        from microguard.events import InMemoryDecisionRecorder
+
+        recorder = InMemoryDecisionRecorder()
+        recorder.record({
+            "id": "dec-1", "ip": "203.0.113.5", "label": "bot", "score": 0.9,
+            "features": [0.5] * 19,
+        })
+        recorder.record({
+            "id": "dec-no-features", "ip": "203.0.113.6", "label": "human",
+            "score": 0.1, "features": None,
+        })
+        app = create_app(recorder=recorder, feedback_dir=str(tmp_path), deployment_id="prod")
+        return TestClient(app), tmp_path
+
+    def test_a_correction_is_recorded_without_any_flag(self, feedback_client):
+        client, feedback_dir = feedback_client
+        response = client.post("/api/live/feedback", json={"decision_id": "dec-1", "label": "human"})
+
+        assert response.status_code == 200
+        rows = (feedback_dir / "prod.jsonl").read_text(encoding="utf-8").strip().splitlines()
+        assert json.loads(rows[0])["label"] == 0.0
+
+    def test_a_bot_correction_records_the_other_label(self, feedback_client):
+        client, feedback_dir = feedback_client
+        client.post("/api/live/feedback", json={"decision_id": "dec-1", "label": "bot"})
+
+        rows = (feedback_dir / "prod.jsonl").read_text(encoding="utf-8").strip().splitlines()
+        assert json.loads(rows[0])["label"] == 1.0
+
+    def test_clicking_twice_records_one_example(self, feedback_client):
+        client, feedback_dir = feedback_client
+        client.post("/api/live/feedback", json={"decision_id": "dec-1", "label": "human"})
+        client.post("/api/live/feedback", json={"decision_id": "dec-1", "label": "human"})
+
+        from microguard.training.online_update import load_corrections
+        assert len(load_corrections("prod", feedback_dir)) == 1
+
+    def test_an_unknown_decision_is_a_404(self, feedback_client):
+        """The decision feed is capped at 1000. A row that scrolled out cannot
+        be corrected, and saying so beats recording a correction against
+        nothing."""
+        client, _ = feedback_client
+        response = client.post(
+            "/api/live/feedback", json={"decision_id": "gone", "label": "human"}
+        )
+        assert response.status_code == 404
+
+    def test_a_decision_with_no_features_cannot_be_corrected(self, feedback_client):
+        """Fail-open rows carry no vector: nothing was scored, so there is
+        nothing to train on. Training on a placeholder would be worse than
+        refusing."""
+        client, _ = feedback_client
+        response = client.post(
+            "/api/live/feedback", json={"decision_id": "dec-no-features", "label": "bot"}
+        )
+        assert response.status_code == 422
+        assert "features" in response.json()["detail"].lower()
+
+    def test_an_invalid_label_is_rejected(self, feedback_client):
+        client, _ = feedback_client
+        response = client.post(
+            "/api/live/feedback", json={"decision_id": "dec-1", "label": "maybe"}
+        )
+        assert response.status_code == 422
+
+    def test_feedback_is_unavailable_without_a_deployment_id(self, tmp_path):
+        """Corrections are per-deployment by definition. Without an id there
+        is nothing to attribute them to."""
+        from microguard.dashboard.app import create_app
+        from microguard.events import InMemoryDecisionRecorder
+
+        client = TestClient(create_app(recorder=InMemoryDecisionRecorder()))
+        response = client.post(
+            "/api/live/feedback", json={"decision_id": "dec-1", "label": "human"}
+        )
+        assert response.status_code == 503
+        assert "--deployment-id" in response.json()["detail"]
+
+    def test_a_write_failure_is_reported_rather_than_swallowed(self, tmp_path, monkeypatch):
+        """An operator who clicked and saw nothing happen would click again,
+        and the correction would still be lost."""
+        from microguard.dashboard.app import create_app
+        from microguard.events import InMemoryDecisionRecorder
+
+        recorder = InMemoryDecisionRecorder()
+        recorder.record({"id": "dec-1", "ip": "1.1.1.1", "label": "bot",
+                         "score": 0.9, "features": [0.5] * 19})
+
+        def boom(**kwargs):
+            raise OSError("disk full")
+
+        monkeypatch.setattr("microguard.dashboard.api_live.record_correction", boom)
+        client = TestClient(create_app(
+            recorder=recorder, feedback_dir=str(tmp_path), deployment_id="prod"
+        ))
+
+        response = client.post(
+            "/api/live/feedback", json={"decision_id": "dec-1", "label": "human"}
+        )
+        assert response.status_code == 500
+        assert "disk full" in response.json()["detail"]

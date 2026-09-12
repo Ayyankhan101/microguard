@@ -60,6 +60,8 @@ def create_app(
     allow_config_writes: bool = False,
     static_dir: str | None = None,
     token: str | None = None,
+    deployment_id: str | None = None,
+    feedback_dir: str | None = None,
 ) -> FastAPI:
     """Build the dashboard app.
 
@@ -81,6 +83,11 @@ def create_app(
     app.state.runtime_config = runtime_config
     app.state.redis = client
     app.state.allow_config_writes = allow_config_writes
+    # Corrections are per-deployment by definition: the whole point is
+    # adapting to ONE deployment's traffic, so without an id there is
+    # nothing to attribute them to and the endpoint reports that.
+    app.state.deployment_id = deployment_id
+    app.state.feedback_dir = feedback_dir
 
     if token:
         _require_token(app, token)

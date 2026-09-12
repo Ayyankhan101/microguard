@@ -10,6 +10,7 @@ import asyncio
 import json
 import logging
 from collections.abc import AsyncIterator
+from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field
@@ -17,6 +18,7 @@ from sse_starlette.sse import EventSourceResponse
 
 from ..events import DecisionRecorder
 from ..signals import KNOWN_SIGNAL_SOURCES
+from ..training.online_update import record_correction
 
 logger = logging.getLogger(__name__)
 
@@ -155,3 +157,73 @@ def write_config(request: Request, update: ConfigUpdate) -> dict:
         "known_signals": sorted(KNOWN_SIGNAL_SOURCES),
         "writable": True,
     }
+
+
+class FeedbackSubmission(BaseModel):
+    """An operator saying a recorded decision was wrong.
+
+    `label` is what the session ACTUALLY was, not what microguard said. That
+    reads more naturally at the click site ("this was a human") and leaves no
+    room for the off-by-one an "is_wrong" boolean invites.
+    """
+
+    model_config = {"extra": "forbid"}
+
+    decision_id: str = Field(min_length=1, max_length=64)
+    label: Literal["bot", "human"]
+
+
+@router.post("/feedback")
+def submit_feedback(request: Request, submission: FeedbackSubmission) -> dict:
+    """Record a correction against one decision.
+
+    Open by default, unlike the config writes above. A recorded correction
+    changes nothing until someone deliberately retrains, and the safety rails
+    in online_update refuse thin or skewed data at that point -- so the gate
+    belongs there, not here. Gating collection instead would leave the button
+    dark on a default install, and a retrain needs 50 corrections before it
+    will run at all.
+    """
+    deployment_id = getattr(request.app.state, "deployment_id", None)
+    if not deployment_id:
+        raise HTTPException(
+            status_code=503,
+            detail="Corrections are per-deployment. Start the dashboard with "
+            "--deployment-id to record them.",
+        )
+
+    recorder = request.app.state.recorder
+    decision = next(
+        (d for d in recorder.recent(MAX_EVENTS) if d.get("id") == submission.decision_id),
+        None,
+    )
+    if decision is None:
+        raise HTTPException(
+            status_code=404,
+            detail="No such decision. The feed keeps the most recent "
+            f"{MAX_EVENTS}; older ones cannot be corrected.",
+        )
+
+    features = decision.get("features")
+    if not features:
+        raise HTTPException(
+            status_code=422,
+            detail="That decision carries no features - nothing was scored for "
+            "it, so there is nothing to train on. Fail-open rows look like this.",
+        )
+
+    try:
+        record_correction(
+            deployment_id=deployment_id,
+            decision_id=submission.decision_id,
+            features=features,
+            confirmed_label=1.0 if submission.label == "bot" else 0.0,
+            feedback_dir=getattr(request.app.state, "feedback_dir", None),
+        )
+    except OSError as exc:
+        # Surfaced, never swallowed: an operator who clicked and saw nothing
+        # happen would click again, and the correction would still be lost.
+        logger.exception("could not record correction")
+        raise HTTPException(status_code=500, detail=f"Could not record: {exc}") from exc
+
+    return {"recorded": True, "decision_id": submission.decision_id}

@@ -3,6 +3,48 @@
 ## [Unreleased]
 
 ### Added
+- **Per-deployment adaptation.** An operator corrects a wrong verdict from the
+  dashboard; `microguard retrain --deployment-id <id>` fine-tunes the baseline
+  on that deployment's own confirmed corrections and publishes a model the
+  running check server picks up within about five seconds, with no restart and
+  no dropped sessions.
+  - **The shipped baseline is never written.** One deployment's bad corrections
+    must not corrupt what every other deployment, and every fresh install,
+    starts from. Rolling back is deleting one file.
+  - Decisions now carry an **id** and the **feature vector** they were made
+    from. Neither existed, and without both a correction has nothing to point
+    at and nothing to train on: the live session is a 200-entry sliding window
+    on a 1800s TTL, so by the time anyone reviews a block, the inputs are gone.
+  - Corrections are keyed by decision id, so a double-click or a changed mind
+    is one example with one label. Recording is open by default and retraining
+    is the gated step, because a recorded correction changes nothing until
+    someone deliberately acts on it.
+  - Both safety rails refuse rather than crash, and say what would change the
+    answer: fewer than 50 corrections, or more than 90% one class.
+- **Signal promotion.** `mg:v1:config` now carries the list of sources allowed
+  to decide a verdict, settable from the dashboard and read per request. Every
+  signal built in this release ships observe-only; nothing blocks until you
+  promote it.
+- **A shadow counter** beside the threshold slider: how many of the last N
+  decisions a candidate threshold would block, and how many more or fewer that
+  is than actually happened. Observe-only mode is the documented way to start a
+  deployment, and until now it produced no number at all.
+
+### Fixed
+- A corrupt deployment model degraded the scorer to heuristics-only with **no
+  symptom**: no exception, no warning at request time, `model_score` pinned at
+  0.0 and every blend quietly missing 60% of its signal. The scorer now refuses
+  a model it cannot load, keeps the one that works, and reports the refusal on
+  every decision so the dashboard can show it.
+- A retrained model was published without the `normalization.json` that
+  `load()` reads from the directory beside it, so it would have scored **raw**
+  features while trained on scaled ones — the same mismatch that once left this
+  project with 2.4% held-out bot recall instead of 100%, silently. The
+  baseline's normalization now travels with every deployment model.
+- `/api/live/events` and the SSE stream no longer ship the stored feature
+  vector. The browser has no use for 19 floats per row, and a per-session
+  behavioural vector should not travel further than it needs to.
+
 - **Browser fingerprinting.** `GET /fingerprint.js` and `POST /fp`, served by
   all three deployment hosts. The script collects canvas, WebGL, font, screen
   and timezone signals, hashes them with SHA-256 **in the browser**, and sends

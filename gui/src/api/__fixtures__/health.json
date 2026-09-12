@@ -6,5 +6,6 @@
     "running": false,
     "reason": "no redis",
     "sources": []
-  }
+  },
+  "feedback_enabled": false
 }

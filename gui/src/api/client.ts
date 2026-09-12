@@ -5,7 +5,7 @@
  * boundary, and turn the API's `detail` message into something the UI can put
  * in front of a person.
  */
-import type { z } from 'zod';
+import { z } from 'zod';
 
 import {
   HealthSchema,
@@ -126,4 +126,21 @@ export const setPromotedSignals = (
       block_threshold: blockThreshold,
       promoted_signals: promoted,
     }),
+  });
+
+const FeedbackAckSchema = z.object({
+  recorded: z.boolean(),
+  decision_id: z.string(),
+});
+
+/**
+ * Tell the server a decision was wrong. `label` is what the session ACTUALLY
+ * was, not what microguard said — that reads the way the click does and leaves
+ * no room for an off-by-one.
+ */
+export const sendFeedback = (decisionId: string, label: 'bot' | 'human') =>
+  request('/api/live/feedback', FeedbackAckSchema, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ decision_id: decisionId, label }),
   });

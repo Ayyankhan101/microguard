@@ -11,11 +11,13 @@
       "request_count": 1,
       "duration": 0.0,
       "model_loaded": true,
+      "model_refused": null,
       "block_threshold": 0.85,
       "reason": "known bot/monitoring UA: curl/8.0",
       "signals": {
         "resolved": false
       },
+      "id": "2741f4af8db44a6f8438d3defb60f679",
       "ts": 1700000000.0
     },
     {
@@ -29,11 +31,13 @@
       "request_count": 1,
       "duration": 0.0,
       "model_loaded": true,
+      "model_refused": null,
       "block_threshold": 0.85,
       "reason": "known bot/monitoring UA: python-requests/2.28.0",
       "signals": {
         "resolved": false
       },
+      "id": "1196fecfa8f04caba0dc779b3d945f7e",
       "ts": 1700000000.0
     },
     {
@@ -47,11 +51,13 @@
       "request_count": 5,
       "duration": 34.0,
       "model_loaded": true,
+      "model_refused": null,
       "block_threshold": 0.85,
       "reason": "known browser, reasonable session (5 req, 34s)",
       "signals": {
         "resolved": false
       },
+      "id": "522612ee34ca4b2ba29937c5c5433180",
       "ts": 1700000000.0
     },
     {
@@ -65,11 +71,13 @@
       "request_count": 4,
       "duration": 20.0,
       "model_loaded": true,
+      "model_refused": null,
       "block_threshold": 0.85,
       "reason": "natural navigation with 4 referrers",
       "signals": {
         "resolved": false
       },
+      "id": "78cf7cbf818c4fc09c247f39fe92e737",
       "ts": 1700000000.0
     },
     {
@@ -83,11 +91,13 @@
       "request_count": 3,
       "duration": 11.0,
       "model_loaded": true,
+      "model_refused": null,
       "block_threshold": 0.85,
       "reason": "natural navigation with 3 referrers",
       "signals": {
         "resolved": false
       },
+      "id": "781f665410974ccc977c11ec0fd8ed93",
       "ts": 1700000000.0
     },
     {
@@ -101,11 +111,13 @@
       "request_count": 2,
       "duration": 4.0,
       "model_loaded": true,
+      "model_refused": null,
       "block_threshold": 0.85,
       "reason": "no strong signals either way",
       "signals": {
         "resolved": false
       },
+      "id": "826bd5f0b0dc4863b2f4272876e02539",
       "ts": 1700000000.0
     },
     {
@@ -119,11 +131,13 @@
       "request_count": 1,
       "duration": 0.0,
       "model_loaded": true,
+      "model_refused": null,
       "block_threshold": 0.85,
       "reason": "no strong signals either way",
       "signals": {
         "resolved": false
       },
+      "id": "ecee16e124914ca9ab3b7361578ee662",
       "ts": 1700000000.0
     }
   ]

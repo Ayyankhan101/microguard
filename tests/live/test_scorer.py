@@ -245,7 +245,7 @@ class TestBlockBoundary:
 EXPECTED_KEYS = {
     "ip", "label", "score", "model_score", "heuristic_label",
     "heuristic_confidence", "heuristic_reason", "request_count",
-    "duration", "model_loaded", "reason", "block_threshold",
+    "duration", "model_loaded", "model_refused", "reason", "block_threshold",
     # What the external signals said, and which of them were allowed to decide.
     # An unpromoted signal changes no verdict but is still recorded, which is
     # the only way an operator can see what enforcing it would cost.

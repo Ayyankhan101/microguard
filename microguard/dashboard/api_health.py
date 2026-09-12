@@ -34,6 +34,10 @@ def health(request: Request) -> dict:
         "model_loaded": os.path.exists(DEFAULT_MODEL_PATH),
         "redis_connected": request.app.state.redis_connected,
         "signals": _signal_health(getattr(request.app.state, "redis", None)),
+        # Corrections are per-deployment by definition. Reported here so
+        # the dashboard can say why the control is unavailable instead of
+        # letting every click discover it with a 503.
+        "feedback_enabled": bool(getattr(request.app.state, "deployment_id", None)),
     }
 
 

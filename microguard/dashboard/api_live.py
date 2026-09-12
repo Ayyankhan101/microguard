@@ -55,11 +55,23 @@ async def decision_stream(
             if fingerprint in seen:
                 continue
             seen.add(fingerprint)
-            yield {"event": "decision", "data": json.dumps(decision)}
+            yield {"event": "decision", "data": json.dumps(_without_features(decision))}
 
         ticks += 1
         if _max_ticks is None or ticks < _max_ticks:
             await asyncio.sleep(poll_interval)
+
+
+def _without_features(decision: dict) -> dict:
+    """Strip the stored feature vector before a decision leaves the server.
+
+    The browser has no use for 19 floats per row -- it would be a third of the
+    payload for something nothing renders -- and the feedback endpoint reads
+    them server-side from the same record. Keeping them out of the response
+    also keeps a per-session behavioural vector from travelling further than
+    it needs to.
+    """
+    return {k: v for k, v in decision.items() if k != "features"}
 
 
 @router.get("/stats")
@@ -71,7 +83,11 @@ def stats(request: Request) -> dict:
 @router.get("/events")
 def events(request: Request, limit: int = Query(default=100, ge=1, le=MAX_EVENTS)) -> dict:
     """The most recent decisions, newest first."""
-    return {"events": request.app.state.recorder.recent(limit=limit)}
+    return {
+        "events": [
+            _without_features(d) for d in request.app.state.recorder.recent(limit=limit)
+        ]
+    }
 
 
 @router.get("/stream")

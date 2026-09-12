@@ -7,7 +7,11 @@ import {
   getLiveStats,
   setBlockThreshold,
   setPromotedSignals,
+  sendFeedback,
+  getHealth,
 } from '../api/client';
+import { FeedbackControl } from '../components/FeedbackControl';
+import { ShadowCounter } from '../components/ShadowCounter';
 import { SignalPromotion } from '../components/SignalPromotion';
 import { DecisionSchema, LiveStatsSchema, type Decision, type LiveStats } from '../api/schemas';
 import { Histogram } from '../components/Histogram';
@@ -70,6 +74,10 @@ function useLiveFeed() {
 export function LiveTab() {
   const { decisions, stats } = useLiveFeed();
   const [selected, setSelected] = useState<Decision | null>(null);
+  // The server reports 503 with the reason when no deployment id is set;
+  // asking health once is friendlier than letting every click find out.
+  const health = useQuery({ queryKey: ['health'], queryFn: getHealth });
+  const feedbackAvailable = health.data?.feedback_enabled ?? false;
   const queryClient = useQueryClient();
 
   const config = useQuery({ queryKey: ['live-config'], queryFn: getLiveConfig });
@@ -149,6 +157,10 @@ export function LiveTab() {
             error={saveThreshold.error?.message ?? null}
             onSave={(value) => saveThreshold.mutate(value)}
           />
+          <ShadowCounter
+            decisions={decisions}
+            threshold={config.data?.block_threshold ?? null}
+          />
           <SignalPromotion
             known={config.data?.known_signals ?? []}
             promoted={config.data?.promoted_signals ?? []}
@@ -210,9 +222,31 @@ export function LiveTab() {
             <LabelBadge label={selected.label} />
             <RiskBadge score={selected.score} />
             {!selected.model_loaded && <span className="badge badge--warning">no model</span>}
+            {selected.model_refused && (
+              <span
+                className="badge badge--warning"
+                title={`refused: ${selected.model_refused}`}
+              >
+                model swap refused
+              </span>
+            )}
             <span className="mono" style={{ color: 'var(--text-muted)' }}>
               {selected.heuristic_reason}
             </span>
+          </div>
+          {/*
+            The correction lives here rather than inline on the row: the row is
+            itself a button for selection, and nesting interactive elements is
+            invalid HTML. It costs the same single click, and the operator sees
+            the full breakdown before deciding the verdict was wrong.
+          */}
+          <div className="row" style={{ marginBottom: 12 }}>
+            <FeedbackControl
+              decisionId={selected.id}
+              currentLabel={selected.label}
+              available={feedbackAvailable}
+              onSubmit={sendFeedback}
+            />
           </div>
           <ScoreRuler
             blended={selected.score}

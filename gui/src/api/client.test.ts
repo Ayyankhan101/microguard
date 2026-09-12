@@ -24,6 +24,7 @@ describe('the API client', () => {
       model_loaded: true,
       redis_connected: false,
       signals: { running: false, reason: 'no redis', sources: [] },
+      feedback_enabled: false,
     };
     vi.stubGlobal('fetch', respondWith(payload));
 

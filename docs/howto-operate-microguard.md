@@ -20,6 +20,8 @@ restarts or retrains itself. Nothing runs unless you run it.
 | Redis failure mid-flight fails open | Exporting deny lists |
 | Signal records expire with the session | Running `microguard signals` |
 | A dead feed falls back to its last cache | Noticing a feed has been dead for a week |
+| A retrained model is picked up in ~5s | Running the retrain |
+| A corrupt model is refused, not loaded | Fixing the model it refused |
 
 The counters in `mg:v1:counters` and `mg:v1:hist` are cumulative for the life of
 the Redis instance and never expire. That is deliberate — see
@@ -188,17 +190,69 @@ accumulates again. On a low-traffic site that window can be long.
 
 So: restart the process freely. Flush Redis deliberately.
 
+### Scores look plausible but the model never changes
+
+**A retrained model was refused.** The scorer loads a candidate, finds it
+unreadable, and keeps the one that was already working rather than falling
+through to no model at all.
+
+That fallback is the point. Before it, a corrupt deployment model produced
+`model_score` 0.0 on every request, which collapses the blend to the heuristic
+alone: scores stayed in range, nothing raised, nothing warned, and every
+decision was quietly missing 60% of its signal.
+
+The refusal travels on the decision itself, so the dashboard shows a **model
+swap refused** badge on the detail panel, and:
+
+```bash
+microguard explain <ip> | head -5
+redis-cli LINDEX mg:v1:events 0 | python3 -m json.tool | grep model_refused
+```
+
+Fix the file it names, or delete it: a deleted deployment model falls straight
+back to the shipped baseline, which is the documented rollback.
+
 ## Picking up a retrained model
 
-This one is not obvious. `LiveScorer` loads the model **once**, in its
-constructor. Retraining rewrites `data/model.json`, and the running process
-keeps scoring with the copy it loaded at startup.
+Two different things, and they behave differently.
+
+**Retraining the baseline** still needs a restart. `LiveScorer` loads the
+baseline once, in its constructor.
 
 ```bash
 python -m microguard.training.train   # writes data/model.json
 # nothing changes yet
 microguard serve                      # restart: now it is in use
 ```
+
+**A per-deployment model does not.** It is checked every few seconds and
+swapped in place:
+
+```bash
+microguard retrain --deployment-id prod
+# live within ~5s, no restart, no dropped sessions
+```
+
+That path needs the check server to have been started with the same id:
+
+```bash
+microguard serve --deployment-id prod
+```
+
+Without the flag the baseline is always used, and a deployment model sitting on
+disk is ignored. That is deliberate: a process that did not ask for one must
+never pick one up.
+
+Corrections come from the dashboard, which also needs the id:
+
+```bash
+microguard dashboard --deployment-id prod
+```
+
+`retrain` refuses rather than crashing when the data will not support it: fewer
+than 50 confirmed corrections, or more than 90% of them one class. Both print
+what would change the answer. The shipped `data/model.json` is never written by
+any of this — rolling back is deleting one file.
 
 Confirm the new model is live by watching `model_score` move on the dashboard,
 or by comparing a known request before and after.

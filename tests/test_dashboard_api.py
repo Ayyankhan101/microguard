@@ -735,3 +735,34 @@ class TestFeedbackEndpoint:
         )
         assert response.status_code == 500
         assert "disk full" in response.json()["detail"]
+
+
+class TestFeatureVectorsStayServerSide:
+    """The browser never needs the stored vector, and it is a third of the row.
+
+    The feedback endpoint reads the features from the same record server-side,
+    so nothing is lost by keeping a per-session behavioural vector off the
+    wire.
+    """
+
+    @pytest.fixture()
+    def recorded(self):
+        from microguard.dashboard.app import create_app
+        from microguard.events import InMemoryDecisionRecorder
+
+        recorder = InMemoryDecisionRecorder()
+        recorder.record({"id": "dec-1", "ip": "1.1.1.1", "label": "bot",
+                         "score": 0.9, "features": [0.5] * 19})
+        return TestClient(create_app(recorder=recorder))
+
+    def test_events_carry_the_id_but_not_the_features(self, recorded):
+        event = recorded.get("/api/live/events").json()["events"][0]
+
+        assert event["id"] == "dec-1"
+        assert "features" not in event
+
+    def test_the_stream_strips_them_too(self, recorded):
+        from microguard.dashboard.api_live import _without_features
+
+        assert "features" not in _without_features({"id": "x", "features": [1.0]})
+        assert _without_features({"id": "x", "features": [1.0]})["id"] == "x"

@@ -19,6 +19,7 @@ function stubApi() {
             model_loaded: true,
             redis_connected: true,
             signals: { running: true, age_seconds: 12, resolved: 3, sources: [] },
+            feedback_enabled: false,
           }
         : url.includes('/live/events')
           ? { events: [] }

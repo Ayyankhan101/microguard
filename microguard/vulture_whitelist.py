@@ -55,6 +55,7 @@ api_model.evaluate
 api_live.stats
 api_live.events
 api_live.stream
+api_live.submit_feedback
 api_live.read_config
 api_live.write_config
 

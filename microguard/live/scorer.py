@@ -80,6 +80,7 @@ def fail_open_result(ip: str = "") -> dict:
         "request_count": 0,
         "duration": 0.0,
         "model_loaded": False,
+        "model_refused": None,
         # No threshold was consulted, and saying otherwise would let a
         # dashboard plot a bar this decision never met.
         "block_threshold": None,
@@ -397,6 +398,12 @@ class LiveScorer:
             "request_count": session.request_count,
             "duration": session.duration,
             "model_loaded": self.model_loaded,
+            # Set when a candidate model would not load and the previous one
+            # was kept. It travels on the decision because that is the only
+            # channel the dashboard reads: the failure it replaces was
+            # completely silent, and a silently dead model is indistinguishable
+            # from a working one in every score it produces.
+            "model_refused": self.model_refused,
             # Which bar this decision was actually judged against — without it
             # a dashboard cannot tell a changed threshold from a changed score.
             "block_threshold": self._block_threshold if threshold is None else threshold,

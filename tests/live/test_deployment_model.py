@@ -295,3 +295,21 @@ class TestDoubleCheckedLocking:
         second.join(timeout=5)
 
         assert loads == [1], "the waiting thread reloaded instead of re-checking"
+
+    def test_the_refusal_reaches_the_decision_payload(
+        self, store, baseline, deployment_model, tmp_path
+    ):
+        """A log line is not enough. The dashboard reads decisions, not logs,
+        and the failure this replaces produced no symptom at all."""
+        scorer = LiveScorer(
+            store, model_path=baseline, deployment_id="prod",
+            feedback_dir=tmp_path, reload_interval=0.0,
+        )
+        assert scorer.score_request(_entry())["model_refused"] is None
+
+        time.sleep(0.01)
+        deployment_model.write_text("{not json", encoding="utf-8")
+        result = scorer.score_request(_entry(ip="203.0.113.9"))
+
+        assert result["model_refused"] == str(deployment_model)
+        assert result["model_loaded"] is True

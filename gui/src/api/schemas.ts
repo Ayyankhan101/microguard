@@ -37,6 +37,9 @@ export const HealthSchema = z.object({
   model_loaded: z.boolean(),
   redis_connected: z.boolean(),
   signals: SignalHealthSchema,
+  /** False when no --deployment-id was set: corrections have nothing to
+   *  attribute to, so the control explains itself instead of failing. */
+  feedback_enabled: z.boolean(),
 });
 export type Health = z.infer<typeof HealthSchema>;
 
@@ -143,7 +146,16 @@ export const DecisionSchema = z.object({
   request_count: z.number(),
   duration: z.number(),
   model_loaded: z.boolean(),
+  /**
+   * Set when a retrained model would not load and the previous one was kept.
+   * It rides the decision because that is the only channel this app reads —
+   * the failure it replaces was completely silent, and a dead model is
+   * indistinguishable from a working one in every score it produces.
+   */
+  model_refused: z.string().nullable().optional(),
   block_threshold: z.number().nullable(),
+  /** What a correction points at. Absent on rows recorded before M3. */
+  id: z.string().optional(),
   ts: z.number(),
 });
 export type Decision = z.infer<typeof DecisionSchema>;

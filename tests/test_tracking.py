@@ -121,14 +121,24 @@ class TestPyFunc:
         assert hasattr(wrapper, "predict")
 
     def test_predict(self):
-        """Verify predict method delegates to detector."""
+        """Verify predict method delegates to detector.
+
+        numpy arrives as an mlflow dependency, and the test matrix installs
+        .[live,fastapi,flask,dashboard] without the mlflow extra -- so this
+        test is unrunnable there and must skip rather than fail. It passed
+        locally only because this machine happens to have numpy from another
+        environment.
+        """
+        np = pytest.importorskip(
+            "numpy", reason="numpy ships with the mlflow extra; not installed here"
+        )
+
         from microguard.tracking import BotDetectorPyFunc
 
         wrapper = BotDetectorPyFunc()
         wrapper.detector = MagicMock()
         wrapper.detector.predict_batch.return_value = [0.8, 0.2]
 
-        import numpy as np
         context = MagicMock()
         model_input = [[0.5] * 19, [0.3] * 19]
         result = wrapper.predict(context, model_input)

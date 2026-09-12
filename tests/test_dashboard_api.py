@@ -64,7 +64,7 @@ class TestHealth:
 
         assert response.status_code == 200
         body = response.json()
-        assert body["version"] == "2.0.0"
+        assert body["version"] == "3.0.0"
         assert isinstance(body["model_loaded"], bool)
         assert isinstance(body["redis_connected"], bool)
 

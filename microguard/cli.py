@@ -718,7 +718,7 @@ def main():
         )
 
     elif args.command == 'info':
-        print("🔍 Microguard v2.0.0")
+        print("🔍 Microguard v3.0.0")
         print("   Bot Traffic Audit Tool powered by micrograd")
         print()
         print("   Usage:")

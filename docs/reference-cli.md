@@ -117,7 +117,82 @@ extra. Blocks until interrupted. Full detail in the
 | `--redis-url` | str | `redis://localhost:6379` |
 | `--block-threshold` | float | `0.85` |
 | `--session-ttl` | int | `1800` |
+| `--deployment-id` | none | Use this deployment's retrained model when one exists. Without it the shipped baseline is always used, and a deployment model on disk is ignored |
 | `--trust-forwarded-for` | flag | off |
+
+## `microguard signals`
+
+Resolves external reputation data out of the request path. Needs Redis.
+
+```bash
+microguard signals [--redis-url URL] [--interval 300] [--session-ttl 1800]
+```
+
+| Flag | Default | What it does |
+|---|---|---|
+| `--redis-url` | `redis://localhost:6379` | Must be the same Redis the check server uses |
+| `--interval` | `300` | Seconds between refresh passes |
+| `--session-ttl` | `1800` | Expiry on each written signal record |
+
+Fetches the Tor exit-node list and AWS prefix ranges from their published
+keyless endpoints, caches them under `$XDG_CACHE_HOME/microguard` with a
+stale-on-failure fallback, and writes a record only for actors that already
+have a live session — so the keyspace is bounded by real traffic rather than by
+the size of the internet.
+
+Set `ABUSEIPDB_API_KEY` to add AbuseIPDB. Without it that signal is inert and
+nothing is broken.
+
+**This process is why the fetches are not in the check server.** nginx turns a
+slow `auth_request` into a 500 for the visitor, so a slow feed inside `/check`
+would be an outage. If this process dies, records go stale and then expire and
+the check server scores without them — degraded, not down.
+
+It writes `mg:v1:signals:heartbeat`, which never expires, so an absent
+heartbeat means "never ran" rather than "died an hour ago".
+
+## `microguard explain`
+
+Why one actor got the verdict it did. Read-only, and needs Redis.
+
+```bash
+microguard explain <ip> [--redis-url URL] [--promote tor,abuseipdb]
+```
+
+| Flag | Default | What it does |
+|---|---|---|
+| `--promote` | none | Treat these sources as enforced when explaining |
+
+Prints the session, the resolved signals with their promotion state, the bound
+fingerprint, and the rule that decided. It reads the session back rather than
+recording a request: diagnosis must not change the thing being diagnosed.
+
+The dashboard answers this better when you have a browser. This exists for a
+headless box with the dashboard on loopback.
+
+## `microguard retrain`
+
+Fine-tunes the model on one deployment's confirmed corrections.
+
+```bash
+microguard retrain --deployment-id <id> [--feedback-dir DIR]
+                   [--min-examples 50] [--epochs 20]
+```
+
+| Flag | Default | What it does |
+|---|---|---|
+| `--deployment-id` | *required* | Corrections never mix across ids |
+| `--feedback-dir` | `$XDG_DATA_HOME/microguard/feedback` | Where corrections live |
+| `--min-examples` | `50` | Refuse to train below this many |
+| `--epochs` | `20` | Adaptation, not training from scratch |
+
+Refuses rather than crashing when the data will not support it — fewer than
+`--min-examples` corrections, or more than 90% of them one class — and prints
+what would change the answer.
+
+**`data/model.json` is never written.** The retrained model goes beside the
+corrections, and `microguard serve --deployment-id <id>` picks it up within
+about five seconds with no restart. Rolling back is deleting that one file.
 
 ## `microguard dashboard`
 

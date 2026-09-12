@@ -15,7 +15,7 @@ function stubApi() {
     vi.fn().mockImplementation((url: string) => {
       const body: Record<string, unknown> = url.includes('/health')
         ? {
-            version: '2.0.0',
+            version: '3.0.0',
             model_loaded: true,
             redis_connected: true,
             signals: { running: true, age_seconds: 12, resolved: 3, sources: [] },

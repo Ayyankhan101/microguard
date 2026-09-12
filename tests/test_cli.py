@@ -207,7 +207,7 @@ class TestMainCLI:
     def test_info_command_does_not_exit_and_prints_version(self, monkeypatch, capsys):
         monkeypatch.setattr(sys, 'argv', ['microguard', 'info'])
         cli_module.main()  # no SystemExit — info falls through normally
-        assert 'v2.0.0' in capsys.readouterr().out
+        assert 'v3.0.0' in capsys.readouterr().out
 
     def test_bare_invocation_runs_sample_scan(self, monkeypatch, capsys):
         code = self._run(monkeypatch, [])

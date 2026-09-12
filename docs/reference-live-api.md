@@ -72,6 +72,38 @@ Responds with the [decision payload](#decision-payload) as a JSON body and as
 
 ---
 
+### `GET /fingerprint.js` · `POST /fp`
+
+**Public**, unlike `/check`. Served by all three hosts: the check server, and
+both middleware. Behind nginx they need a second, non-`internal` location — see
+[deploying behind nginx](howto-deploy-behind-nginx.md).
+
+```
+GET  /fingerprint.js   ->  the client probe, cacheable
+POST /fp               ->  {"fingerprint_hash": "<64 hex chars>"}
+```
+
+Both spellings of each path are accepted (`/fp` and `/microguard/fp`), because
+nginx may or may not strip the location prefix depending on whether
+`proxy_pass` carries a trailing path.
+
+**Every outcome answers `200` with identical bytes.** A 4xx would hand an
+unauthenticated caller an oracle for which IPs are bindable, and would surface
+a microguard problem as an error on someone else's page. Submissions are
+silently ignored when the body is malformed or oversized, when the actor has no
+session history, when the session already has a different hash bound, or when
+Redis is unreachable.
+
+**A hash is only bound to an IP that already has session history, and only
+once per session**, claimed atomically. Without that, `/fp` is an amplification
+vector: canvas fingerprints collide heavily across identical hardware and
+browser versions, so an attacker who harvests one real browsers produce could
+replay it from a botnet and get those users blocked by the cross-IP rule.
+
+**Fingerprinting needs HTTPS.** The script hashes with SubtleCrypto, which only
+exists in a secure context. On a plain-HTTP origin it logs a console warning and
+sends nothing.
+
 ## Middleware
 
 Both classes take identical arguments, matching the `microguard serve` flags.
@@ -251,6 +283,31 @@ it. Responses:
 
 Every accepted change is logged at warning level with its old and new value.
 
+### `POST /api/live/feedback`
+
+Records an operator's correction against one decision.
+
+```json
+{ "decision_id": "a1b2c3...", "label": "human" }
+```
+
+`label` is what the session **actually** was, not what microguard said.
+
+| Response | When |
+|---|---|
+| `200 {"recorded": true, "decision_id": "..."}` | Recorded |
+| `404` | No such decision — the feed keeps the most recent 1000 |
+| `422` | That decision carries no features, so there is nothing to train on. Fail-open rows look like this |
+| `503` | No `--deployment-id` was set. Corrections are per-deployment by definition |
+
+**Open by default**, unlike the config writes above. A recorded correction
+changes nothing until someone deliberately runs `microguard retrain`, and the
+safety rails refuse thin or skewed data at that point — so the gate belongs
+there. Gating collection instead would leave the control dark on a default
+install, and a retrain needs 50 corrections before it runs at all.
+
+Keyed by decision id, so a double-click records one example rather than two.
+
 ### `GET /api/scan/samples`
 
 ```json
@@ -345,9 +402,12 @@ both at once:
 | `mg:v1:counters` | HASH | `total`, `blocked`, `score_sum` |
 | `mg:v1:hist` | HASH | bucket index `0`–`19` → count |
 | `mg:v1:blocked_ips` | ZSET | IP → times blocked, trimmed to the busiest 1000 |
-| `mg:v1:config` | HASH | `block_threshold` → float, absent when there is no override |
+| `mg:v1:config` | HASH | `block_threshold` → float; `promoted_signals` → JSON array of enforced source names. Both absent means no override and observe-only |
 | `mg:v1:signals:{ip}` | STRING | JSON of externally resolved signals for one actor. Written by `microguard signals`, expires with the session TTL |
 | `mg:v1:signals:heartbeat` | STRING | JSON `{ts, resolved, sources}` from the last refresh pass. **Never expires** — an absent key means the refresher has never run, which is a different problem from one that died |
+| `mg:v1:fp:{ip}` | STRING | `{hash, shared_ips}` for one actor. Its own key rather than a field on `mg:v1:signals:{ip}`, because the refresher `SET`s that key wholesale and would clobber it |
+| `mg:v1:fp_ips:{hash}` | SET | IPs seen with this fingerprint inside the window (600s TTL) |
+| `mg:v2:actor:{hash}` | HASH | `first_seen`, `last_seen`, `sightings`, `distinct_ips`. 30-day sliding TTL — the only structure here that outlives a session. A HASH so sightings use `HINCRBY`; the prefix is v2 because `HINCRBY` against a v1 JSON string is `WRONGTYPE` |
 
 One decision is one pipeline: `LPUSH` + `LTRIM`, `HINCRBY` on the counters and
 the histogram, and `ZINCRBY` on the blocked IPs for a block. Reads are one

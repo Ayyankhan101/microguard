@@ -20,7 +20,7 @@ afterEach(() => {
 describe('the API client', () => {
   it('parses a response through its schema', async () => {
     const payload = {
-      version: '2.0.0',
+      version: '3.0.0',
       model_loaded: true,
       redis_connected: false,
       signals: { running: false, reason: 'no redis', sources: [] },

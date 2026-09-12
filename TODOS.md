@@ -5,7 +5,7 @@ reviews; each one names the condition that should make someone act on it.
 
 ## P2 — Cap the actor-record set by count
 
-**What:** Bound `mg:v1:actor:*` the way `mg:v1:blocked_ips` is bounded, using
+**What:** Bound `mg:v2:actor:*` the way `mg:v1:blocked_ips` is bounded, using
 the `ZREMRANGEBYRANK` pattern in `microguard/live/redis_events.py`.
 
 **Why:** Actor records (added by the fingerprint work) use a 30-day sliding TTL
@@ -27,12 +27,13 @@ eviction by recency can drop a slow, patient adversary in favour of noisy
 short-lived ones.
 
 **Context:** Deferred deliberately during the 2026-09-12 CEO review (decision
-5A). The TTL alone was judged sufficient for expected traffic, and the cap was
+5A). Still open after v3.0.0: the record became a HASH so its counters are
+atomic, but nothing caps how many actor keys exist. The TTL alone was judged sufficient for expected traffic, and the cap was
 left as a known, triggered follow-up rather than speculative work.
 
 **Effort:** S · **Depends on:** the actor-identity work landing first.
 
-**Trigger:** `mg:v1:actor:*` key count above roughly 50,000, or the health panel
+**Trigger:** `mg:v2:actor:*` key count above roughly 50,000, or the health panel
 showing sustained growth in novel hashes.
 
 ## P2 — Evaluate CrowdSec in place of spec 0002

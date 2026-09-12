@@ -1,6 +1,20 @@
 # Changelog
 
-## [Unreleased]
+## [3.0.0] - 2026-09-12
+
+### Breaking
+
+- **`SessionStateStore.record_request` returns a `SessionSnapshot`**, not a
+  `LiveSession`. The snapshot carries the session plus the signals resolved for
+  that actor, so both arrive in one Redis round trip on the path nginx waits
+  on. Anyone who implemented the Protocol — it is documented as an extension
+  point in `reference-live-api.md` — needs to return the new shape; read
+  `snapshot.session` where you previously had the session.
+- **Actor records moved to `mg:v2:actor:`** and are a Redis HASH rather than a
+  JSON string. v1 keys are never touched and expire on their own. The prefix is
+  versioned because `HINCRBY` against a v1 string is `WRONGTYPE`.
+- `label_session` takes a second `signals` argument. It defaults to
+  `EMPTY_SIGNALS`, so every existing caller is unaffected.
 
 ### Added
 - **Per-deployment adaptation.** An operator corrects a wrong verdict from the

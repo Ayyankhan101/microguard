@@ -4,7 +4,6 @@
   "known_signals": [
     "abuseipdb",
     "fingerprint",
-    "hosting",
     "tor"
   ],
   "writable": false

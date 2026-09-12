@@ -803,3 +803,52 @@ class TestEdgeCases:
             assert label in ('bot', 'human', 'automated-integration')
             assert 0.0 <= confidence <= 1.0
             assert reason
+
+
+class TestEveryRuleIsReachable:
+    """`label_session` is a first-match chain, so position decides outcomes.
+
+    A rule placed after one that matches a superset of its inputs can never
+    fire, and nothing reports that -- the rule simply never runs, and the
+    visitor it was written to protect gets the earlier verdict instead. This
+    is the rule-order debt tracked in TODOS.md as P3.
+
+    The check is coverage-based rather than by inspection: run the labeler
+    over a spread of sessions and assert no `return` inside `label_session`
+    is unexecuted for reasons other than the fixtures being thin.
+    """
+
+    def test_the_cloudflare_browser_rule_is_dead(self, make_session, make_entry):
+        """The known instance, pinned by construction rather than by coverage.
+
+        `Cloudflare-protected site, normal browser` (human, 0.65) exists to
+        protect a real visitor whose UA carries a CDN marker. An earlier rule
+        matches the SAME regex and returns 'bot' at 0.90, so that visitor is
+        labeled a bot instead. Build the exact session the late rule wants and
+        show which verdict actually comes back.
+        """
+        from microguard.labeler import CLOUDFLARE_BYPASS_RE, label_session
+
+        # A UA that satisfies BOTH the CDN marker and the browser pattern --
+        # precisely the input the late rule was written for.
+        ua = (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 cloudflare"
+        )
+        assert CLOUDFLARE_BYPASS_RE.search(ua), "fixture no longer matches the CDN regex"
+
+        session = make_session(
+            "203.0.113.9",
+            ua,
+            [make_entry(ip="203.0.113.9", user_agent=ua, url=u)
+             for u in ("/", "/about", "/pricing", "/docs", "/contact")],
+        )
+        label, _confidence, reason = label_session(session)
+
+        assert reason != 'Cloudflare-protected site, normal browser', (
+            "the late rule became reachable -- remove its pragma: no cover, "
+            "delete this test's xfail, and update the CHANGELOG"
+        )
+        assert label == 'bot', (
+            f"expected the earlier CDN rule to win, got {label!r} via {reason!r}"
+        )

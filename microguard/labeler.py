@@ -6,7 +6,7 @@ Labels are noisy but good enough for pre-training. Retrain on real data later.
 
 import re
 
-from .features import BROWSER_UA_RE, Session
+from .features import BROWSER_UA_RE, Session, SessionLike
 from .parser import LogEntry
 from .signals import EMPTY_SIGNALS, Signals
 
@@ -161,7 +161,7 @@ KNOWN_AUTOMATED_CLIENT_PATTERNS = [
 KNOWN_AUTOMATED_CLIENT_RE = re.compile('|'.join(KNOWN_AUTOMATED_CLIENT_PATTERNS), re.IGNORECASE)
 
 
-def _check_cloudflare_signals(session: Session) -> tuple[bool, str]:
+def _check_cloudflare_signals(session: SessionLike) -> tuple[bool, str]:
     """Check for Cloudflare WAF bypass or protection signals.
     
     Returns:
@@ -187,7 +187,7 @@ def _check_cloudflare_signals(session: Session) -> tuple[bool, str]:
     return False, ''
 
 
-def _check_api_key_patterns(session: Session) -> tuple[bool, str]:
+def _check_api_key_patterns(session: SessionLike) -> tuple[bool, str]:
     """Check for API key scanning or credential brute-force patterns.
     
     Returns:
@@ -222,7 +222,7 @@ def _check_api_key_patterns(session: Session) -> tuple[bool, str]:
     return False, ''
 
 
-def _check_botnet_signatures(session: Session) -> tuple[bool, str]:
+def _check_botnet_signatures(session: SessionLike) -> tuple[bool, str]:
     """Check for known botnet and attack tool signatures.
     
     Returns:
@@ -271,7 +271,7 @@ def _looks_like_page_traffic(urls: list[str]) -> bool:
 
 
 def _check_fingerprint_signals(
-    session: Session, signals: Signals, urls: list[str]
+    session: SessionLike, signals: Signals, urls: list[str]
 ) -> tuple[bool, float, str]:
     """Verdict from client-side fingerprint evidence.
 
@@ -342,7 +342,7 @@ def _check_threat_intel_signals(signals: Signals) -> tuple[bool, float, str]:
 
 
 def label_session(
-    session: Session, signals: Signals = EMPTY_SIGNALS
+    session: SessionLike, signals: Signals = EMPTY_SIGNALS
 ) -> tuple[str, float, str]:
     """Label a session as 'bot', 'human', or 'automated-integration' with confidence.
 

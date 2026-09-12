@@ -13,6 +13,7 @@ import math
 import re
 from collections import Counter
 from datetime import datetime, timedelta
+from typing import Protocol, runtime_checkable
 
 from .parser import LogEntry
 
@@ -89,6 +90,34 @@ def _url_width(urls: list[str]) -> int:
         if segments:
             branches.add(segments[0])
     return len(branches)
+
+
+@runtime_checkable
+class SessionLike(Protocol):
+    """What `extract_features` and `label_session` actually require.
+
+    `Session` here and `live/state.py`'s `LiveSession` are both passed to those
+    two functions but share no base class, so a field rename on one used to
+    fail at runtime in the request path -- under nginx `auth_request`, where a
+    raised exception is a 500 on a real visitor. This Protocol makes mypy catch
+    the drift instead. (TODOS.md P3.)
+
+    `start_time` and `end_time` are deliberately absent: `Session` keeps them as
+    datetimes and `LiveSession` as float epochs, so no single annotation is
+    true of both. That difference is real and documented at `LiveSession`; the
+    shared surface is everything below, and `.duration` is a float on both,
+    which is what the callers actually read.
+    """
+
+    ip: str
+    user_agent: str
+    requests: list[LogEntry]
+
+    @property
+    def duration(self) -> float: ...
+
+    @property
+    def request_count(self) -> int: ...
 
 
 class Session:
@@ -170,7 +199,7 @@ def group_into_sessions(
     return all_sessions
 
 
-def extract_features(session: Session) -> list[float]:
+def extract_features(session: SessionLike) -> list[float]:
     """Extract 19 features from a session.
     
     Returns a list of 19 floats, ready for model input.

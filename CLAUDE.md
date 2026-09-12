@@ -102,6 +102,26 @@ Redis and a stable clock. Run these on a **clean tree** before pushing:
   runner. Guard such tests with `pytest.importorskip`, and add any newly
   optional dependency to the blocked list above.
 
+### Platform parity — a review check, not a lane
+
+The `matrix deps` lane above catches tests that depend on a package the runner
+lacks. It does NOT catch tests that depend on OS *behaviour*, and no local lane
+can short of running the suite on Windows. Both failures this project has had
+were the same shape — a test passing here because this machine has a property
+the runner does not:
+
+- `import numpy` in a test, with numpy present locally from an unrelated
+  environment and absent on the matrix. All 12 jobs red.
+- `path.chmod(0o500)` to provoke an `OSError`. POSIX removes write permission;
+  Windows does not, so no error was raised, nothing was logged, and the four
+  Windows jobs failed on an empty assertion while every other platform passed.
+
+So when reviewing a new test, ask: **does this depend on the machine rather
+than the code?** Provoking an error through the filesystem, the clock, the
+locale, or an installed package is the tell. Inject the condition instead
+(`monkeypatch` the call that should fail), which tests the same contract on
+every platform.
+
 ## Test suite conventions
 
 - Shared `LogEntry`/`Session`/temp-log-file builders live in `tests/conftest.py`

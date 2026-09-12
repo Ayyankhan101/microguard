@@ -20,6 +20,7 @@ import redis
 from ..labeler import label_session
 from ..scoring import BLOCK_THRESHOLD_DEFAULT, compute_combined_score
 from ..signals import EMPTY_SIGNALS, signals_from_payload
+from .fingerprint import FP_PREFIX
 from .redis_store import SESSION_PREFIX_DEFAULT, _session_from
 from .signals_refresher import SIGNALS_PREFIX
 
@@ -53,9 +54,25 @@ def explain_actor(
             signals = signals_from_payload(json.loads(raw_signals))
         except json.JSONDecodeError:
             signals = EMPTY_SIGNALS
-    if signals.resolved and promoted:
-        from dataclasses import replace
+    # Fingerprint state lives in its own key, written by /fp rather than by
+    # the refresher. `fp_resolved` is set either way: this command read the
+    # key, so an absent hash means "none bound", not "never looked" -- the
+    # distinction rule 1 turns on.
+    from dataclasses import replace
 
+    raw_fp = cast("str | None", client.get(f"{FP_PREFIX}{ip}"))
+    bound_hash, shared = None, 0
+    if raw_fp:
+        try:
+            fp_payload = json.loads(raw_fp)
+            bound_hash = fp_payload.get("hash")
+            shared = int(fp_payload.get("shared_ips", 0))
+        except (json.JSONDecodeError, AttributeError, TypeError, ValueError):
+            bound_hash, shared = None, 0
+    signals = replace(
+        signals, fp_resolved=True, fingerprint_hash=bound_hash, shared_hash_ips=shared
+    )
+    if promoted:
         signals = replace(signals, promoted=promoted)
 
     label, confidence, reason = label_session(session, signals)  # type: ignore[arg-type]
@@ -91,4 +108,16 @@ def explain_actor(
                       "abuse_score": "abuseipdb"}[name]
             state = "enforced" if signals.is_promoted(source) else "observe-only"
             lines.append(f"    {name}: {value}  ({state})")
+
+    fp_state = "enforced" if signals.is_promoted("fingerprint") else "observe-only"
+    lines.append("")
+    lines.append(f"  fingerprint ({fp_state}):")
+    if signals.fingerprint_hash:
+        lines.append(f"    bound: {signals.fingerprint_hash[:16]}...")
+        lines.append(f"    seen from {signals.shared_hash_ips} distinct IP(s) in the window")
+    else:
+        lines.append("    none bound for this actor")
+        lines.append("    Either the page never embedded fingerprint.js, this is")
+        lines.append("    an API client, or the origin is plain HTTP (the script")
+        lines.append("    needs a secure context and will not run on one).")
     return "\n".join(lines) + "\n"

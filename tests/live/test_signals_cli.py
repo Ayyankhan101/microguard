@@ -237,3 +237,46 @@ class TestRunnerEntryPoint:
         runner.main()
 
         assert "Shutting down" in capsys.readouterr().out
+
+
+class TestExplainShowsFingerprintState:
+    def test_a_bound_hash_is_shown_with_its_spread(self, clean):
+        RedisSessionStateStore(clean, default_ttl=60).record_request(
+            "1.1.1.1", "ua", _entry("1.1.1.1")
+        )
+        clean.set("mg:v1:fp:1.1.1.1", json.dumps({"hash": "e" * 64, "shared_ips": 4}))
+
+        out = explain_actor(clean, "1.1.1.1")
+
+        assert "eeeeeeeeeeeeeeee..." in out
+        assert "4 distinct IP(s)" in out
+        assert "observe-only" in out
+
+    def test_an_unbound_actor_gets_the_three_reasons_why(self, clean):
+        """'No fingerprint' has three completely different causes and three
+        different fixes, so naming them is the difference between a useful
+        diagnosis and a dead end."""
+        RedisSessionStateStore(clean, default_ttl=60).record_request(
+            "1.1.1.1", "ua", _entry("1.1.1.1")
+        )
+
+        out = explain_actor(clean, "1.1.1.1")
+
+        assert "none bound" in out
+        assert "API client" in out
+        assert "secure context" in out
+
+    def test_promoting_fingerprint_reports_it_as_enforced(self, clean):
+        RedisSessionStateStore(clean, default_ttl=60).record_request(
+            "1.1.1.1", "ua", _entry("1.1.1.1")
+        )
+        out = explain_actor(clean, "1.1.1.1", promoted=frozenset({"fingerprint"}))
+        assert "fingerprint (enforced)" in out
+
+    def test_a_corrupt_fingerprint_record_reads_as_unbound(self, clean):
+        RedisSessionStateStore(clean, default_ttl=60).record_request(
+            "1.1.1.1", "ua", _entry("1.1.1.1")
+        )
+        clean.set("mg:v1:fp:1.1.1.1", "{not json")
+
+        assert "none bound" in explain_actor(clean, "1.1.1.1")

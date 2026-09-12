@@ -73,3 +73,11 @@ from microguard.dashboard import api_mlflow
 api_mlflow.mlflow_runs
 tracking.BotDetectorPyFunc
 _.load_context
+
+# The read-back half of the collection archive. Nothing in the package calls
+# it yet -- the writer runs in `serve`, and the reader is what a dataset
+# builder will use once observe-only collection has produced rows worth
+# building from. Tested in tests/test_collect.py.
+from microguard import collect
+
+collect.load_collected

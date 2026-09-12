@@ -174,6 +174,94 @@ The number that would mean something does not exist yet: labeled sessions from
 real traffic that was actually trying to evade this detector. Until then, treat
 every metric here as a smoke test.
 
+## The suspicion above, measured
+
+Everything in the previous section was a caution. It has since been measured,
+and it was right. What follows is what the model actually learned.
+
+### It reads one column, and that column is the label
+
+`header_consistency_score` is **0.7 for all 1000 human rows and 1.0 for all
+2580 bot rows**. Zero overlap.
+
+`features.py` computes it as `1.0 / len(ua_variants)`, whose range is 1.0, 0.5,
+0.333, 0.25... **0.7 is not reachable.** No session extracted by this codebase
+can produce it. The value came from a data generator, not from the extractor,
+and the model found it.
+
+### The network is one live unit out of four
+
+The output layer's weights are `[-1.3443, 0.0004, 0.0010, -0.1869]`. Two hidden
+units are wired to the output at four ten-thousandths and are not participating.
+Contribution to the logit, as `|w| x activation stdev` over the holdout:
+
+```
+h0: 0.732435
+h1: 0.000259
+h2: 0.000295
+h3: 0.019288
+```
+
+h0 is 97% of the signal, and it fires on **200 of 200 humans and 0 of 423
+bots**. When it is off, the logit is the output bias alone: `sigmoid(0.9981) =
+0.7307`. That is why **413 of 623 held-out sessions score exactly 0.731** — not
+a prediction, a bias term.
+
+The 100% holdout accuracy is measuring the leak.
+
+### The cause is structural, not one bad column
+
+The human class comes from exactly one file, so *any* column constant within
+that file identifies the file, and the file identifies the label. Eight columns
+qualify: `endpoint_sequence_entropy`, `has_accept_language`, `ua_category`,
+`payload_entropy`, `status_code_entropy`, `error_rate`, `image_ratio`,
+`night_ratio`.
+
+Patching columns does not fix it. Neutralizing all of them and retraining leaves
+`max_sustained_click_rate`, which separates the classes at **99.75% with a
+single threshold** — and the rule it learns is **"bot if clicking slowly"**,
+backwards from every real bot. It is detecting which file the row came from.
+
+### Why there is no fix inside this repo
+
+Three routes to a real human class were checked:
+
+| Route | Why it fails |
+|---|---|
+| Harvard Dataverse raw files | `data/dataverse/{basket,browse,product,static}` are **timestamp-only** — no IP, UA, URL, or status. Only the timing columns were ever real, which is why the generator filled the rest with class constants. |
+| organization-x benign traffic | 21,617 of 21,629 lines share one IP. Per-actor sessionization is impossible; `(ip, user_agent)` merges many humans into one session. |
+| Sessions the builder discards | `build_real_dataset.py` drops heuristic-human sessions: 363 of them, median 3 requests. But **344 are labeled "no strong signals either way"** — the fallback branch. Training on those teaches the model to reproduce `labeler.py`, and `compute_combined_score` blends the two, so one signal would be counted twice while reading as corroboration. A different bug, not a fix. |
+
+**There is no human ground truth in this repo by any route.** The only source of
+real human sessions extracted by the same `extract_features` as the bot class is
+live traffic.
+
+### What is guarded now
+
+`tests/test_dataset_integrity.py` asserts that no column is constant within a
+class, that no column separates the classes without overlap, and that the human
+class has more than one provenance. All three are `xfail(strict=True)` today,
+with the measured numbers in the reason — so the day real data makes them pass,
+CI says so rather than staying quiet.
+
+`microguard serve --collect-to <path>` archives every scored decision with its
+19 features to durable JSONL. The Redis event list cannot serve this purpose: it
+is capped at 1000 and LTRIMmed. Collected rows are **unlabeled** — they record
+what the tool guessed, and a label only exists after a human confirms one
+through the dashboard, for the reason in the third row of the table above.
+
+### What the model is worth today
+
+Nothing independent of the heuristic. `compute_combined_score` weights it at
+0.6, and that 0.6 is reading a column that cannot occur in production traffic.
+On real input the model returns the bot-side constant for genuine browser
+sessions — in `data/sample_access.log` both a Chrome session and a
+`python-requests` scraper score 0.731, and only the heuristic chain separates
+them.
+
+Until observe-only collection produces labeled human sessions, the rule chain in
+`labeler.py` is the product.
+
 ## Rebuilding it
 
 ```bash

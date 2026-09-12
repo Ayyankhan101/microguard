@@ -322,6 +322,14 @@ def main():
              'it the shipped baseline is always used.'
     )
     serve_parser.add_argument(
+        '--collect-to',
+        default=None,
+        help='Append every scored decision to this JSONL file, for building a '
+             'training set. Off by default: the live event list in Redis is '
+             'capped at 1000 and cannot be that source, but every row here '
+             'carries a client IP, so this is opt-in.'
+    )
+    serve_parser.add_argument(
         '--trust-forwarded-for',
         action='store_true',
         help='Honor X-Forwarded-For for client IP. Only enable behind a proxy '
@@ -723,6 +731,7 @@ def main():
             session_ttl=args.session_ttl,
             trust_forwarded_for=args.trust_forwarded_for,
             deployment_id=args.deployment_id,
+            collect_to=args.collect_to,
         )
 
     elif args.command == 'retrain':

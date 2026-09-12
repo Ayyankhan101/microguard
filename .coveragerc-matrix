@@ -1,0 +1,22 @@
+# Coverage config for the cross-platform test matrix ONLY.
+#
+# Those runners have no Redis, so every test under tests/live/ skips and
+# microguard/live can never execute there. Including it in the measurement does
+# not gate that code -- it only drags the reported number down as the live path
+# grows, which is exactly what happened: 93% on a branch measured at 100% by a
+# job that can actually run the tests.
+#
+# microguard/live is gated in the `live (Redis-backed)` job instead, which has a
+# Redis service container. Between the two jobs, every line is still covered by
+# a gate. Local runs use pyproject.toml and measure everything.
+[run]
+source = microguard
+omit =
+    microguard/vulture_whitelist.py
+    microguard/live/*
+
+[report]
+exclude_lines =
+    pragma: no cover
+    if __name__ == .__main__.:
+    ^\s*\.\.\.$

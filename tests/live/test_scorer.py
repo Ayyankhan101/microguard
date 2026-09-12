@@ -483,3 +483,125 @@ class TestSignalPromotion:
         assert result["label"] == "human"
         assert result["signals"]["promoted"] == []
         assert "promotion source failed" in caplog.text
+
+
+class TestCollectionSink:
+    """Archiving decisions is separate from recording them for the dashboard.
+
+    `mg:v1:events` is capped at 1000 and LTRIMmed, so it cannot be the source
+    of a training set. The collector is the durable copy, and it has to run
+    alongside the recorder rather than instead of it.
+    """
+
+    def test_a_scored_decision_reaches_the_collector(self, store, tmp_path):
+        from microguard.collect import DecisionCollector, load_collected
+
+        path = tmp_path / "collected.jsonl"
+        scorer = LiveScorer(
+            store, block_threshold=0.85, collector=DecisionCollector(path)
+        )
+
+        scorer.score_request(_make_entry(ip="9.9.9.9"))
+
+        rows = load_collected(path)
+        assert len(rows) == 1
+        assert rows[0]["ip"] == "9.9.9.9"
+        assert len(rows[0]["features"]) == 19
+
+    def test_the_dashboard_recorder_still_sees_it_too(self, store, tmp_path):
+        from microguard.collect import DecisionCollector
+        from microguard.events import InMemoryDecisionRecorder
+
+        recorder = InMemoryDecisionRecorder()
+        scorer = LiveScorer(
+            store,
+            block_threshold=0.85,
+            recorder=recorder,
+            collector=DecisionCollector(tmp_path / "collected.jsonl"),
+        )
+
+        scorer.score_request(_make_entry())
+
+        assert recorder.stats()["total"] == 1
+
+    def test_a_collector_failure_never_becomes_an_outage(self, store, tmp_path):
+        """nginx turns any non-2xx/401/403 from /check into a 500 for the
+        visitor, so a failed archive write must not reach them."""
+        class Exploding:
+            def record(self, decision):
+                raise RuntimeError("disk gone")
+
+        scorer = LiveScorer(store, block_threshold=0.85, collector=Exploding())
+
+        result = scorer.score_request(_make_entry())  # must not raise
+
+        assert "score" in result
+
+    def test_without_a_collector_nothing_is_written(self, store, tmp_path):
+        """Collection is opt-in: the rows carry client IPs."""
+
+        scorer = LiveScorer(store, block_threshold=0.85)
+        scorer.score_request(_make_entry())
+
+        assert not (tmp_path / "collected.jsonl").exists()
+        assert scorer._collector is None
+
+
+class TestADegenerateModelIsAnnounced:
+    """0.6 of the combined score comes from the model.
+
+    When the model answers the same for every input, that 0.6 carries no
+    information while reading as independent evidence beside the heuristic.
+    Loading one has to say so.
+
+    Scope: total collapse only. The shipped model is a two-valued step
+    function that learned a leaked column, and it passes this check -- see
+    `_warn_if_degenerate` for why no load-time probe catches that, and
+    tests/test_dataset_integrity.py for where it is caught instead.
+    """
+
+    def test_loading_a_constant_model_logs_a_warning_naming_the_file(
+        self, store, tmp_path, caplog
+    ):
+        import logging
+
+        from microguard.model import BotDetector
+
+        detector = BotDetector()
+        for neuron in detector.model.layers[0].neurons:
+            for weight in neuron.w:
+                weight.data = 0.0
+            neuron.b.data = -1.0
+        # Deliberately NOT named "constant.json": model.py already warns
+        # about a missing normalization.json and quotes the path, so a
+        # filename carrying the word under test would make this pass on the
+        # wrong warning. It did, the first time this test was written.
+        path = tmp_path / "shipped.json"
+        detector.save(str(path))
+
+        with caplog.at_level(logging.WARNING, logger="microguard.live.scorer"):
+            LiveScorer(store, model_path=path)
+
+        assert "answers identically" in caplog.text, (
+            f"no degeneracy warning; got: {caplog.text!r}"
+        )
+        assert "shipped.json" in caplog.text
+
+    def test_a_working_model_is_not_flagged(self, store, tmp_path, caplog):
+        import logging
+        import random
+
+        from microguard.model import BotDetector
+
+        random.seed(42)
+        detector = BotDetector()
+        features = [[random.uniform(0.0, 1.0) for _ in range(19)] for _ in range(40)]
+        labels = [1.0 if row[3] > 0.5 else 0.0 for row in features]
+        detector.train(features, labels, epochs=25, learning_rate=0.05, verbose=False)
+        path = tmp_path / "trained.json"
+        detector.save(str(path))
+
+        with caplog.at_level(logging.WARNING, logger="microguard.live.scorer"):
+            LiveScorer(store, model_path=path)
+
+        assert "answers identically" not in caplog.text

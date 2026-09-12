@@ -38,6 +38,7 @@ from typing import cast
 
 import redis
 
+from ..collect import DecisionCollector
 from ..parser import LogEntry
 from .fp_routes import (
     FP_PATHS,
@@ -242,6 +243,7 @@ def run_server(
     session_ttl: int = 1800,
     trust_forwarded_for: bool = False,
     deployment_id: str | None = None,
+    collect_to: str | None = None,
 ):
     """Start the check server."""
     r = redis.Redis.from_url(redis_url, decode_responses=True)
@@ -255,10 +257,16 @@ def run_server(
     # dashboard without a restart, which would otherwise drop every in-flight
     # session. No override set means the flag stands.
     config = RedisRuntimeConfig(r)
+    # Off unless asked for. The archive is the only route to a real training
+    # set -- the Redis event list is capped at 1000 and LTRIMmed -- but every
+    # row carries a client IP, so writing one per request to disk is a
+    # decision an operator makes on purpose.
+    collector = DecisionCollector(collect_to) if collect_to else None
     scorer = LiveScorer(
         store,
         block_threshold=block_threshold,
         recorder=recorder,
+        collector=collector,
         threshold_source=config.block_threshold,
         # Without this, decision 10A's observe-only posture is permanent:
         # every signal is measured and none can ever decide anything.

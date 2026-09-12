@@ -16,6 +16,7 @@ from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
 
+from ..collect import DecisionSink
 from ..events import DecisionRecorder
 from ..features import extract_features
 from ..labeler import label_session
@@ -137,6 +138,52 @@ def _signal_summary(signals: Signals | None) -> dict:
     }
 
 
+def _warn_if_degenerate(model, path) -> None:
+    """Say so when the model answers the same for every input.
+
+    `compute_combined_score` weights the model at 0.6. A model that emits its
+    output bias regardless of input contributes 0.6 of a score that reads as
+    independent evidence beside the heuristic and is not.
+
+    Deliberately narrow: this catches TOTAL collapse -- one value for every
+    input -- which is what a dead or corrupt model looks like at load time,
+    and the runtime counterpart of `BotDetector.check_not_degenerate` at train
+    time.
+
+    It does NOT catch the shipped model's condition, and no cheap load-time
+    probe can. That model is a two-valued step function that learned one
+    leaked column, so it varies with input and passes this check. Output
+    diversity does not separate the two either: measured over 200 random
+    probes the shipped model spreads WIDER than a correctly trained one
+    (range 0.69 vs 0.17), so a diversity threshold would flag the healthy
+    model and clear the broken one. Leak detection belongs to
+    tests/test_dataset_integrity.py, against the dataset, where it is
+    decidable.
+
+    A warning, not a refusal. Which model to serve is an operator's call, and
+    the heuristic still carries the other 0.4 -- but "the ML half is inert"
+    must not be something you can only discover by reading the weights.
+    """
+    if model is None:
+        return
+    probe = [
+        [0.0] * BotDetector.NUM_FEATURES,
+        [0.5] * BotDetector.NUM_FEATURES,
+        [1.0] * BotDetector.NUM_FEATURES,
+    ]
+    try:
+        scores = {round(model.predict(row), 6) for row in probe}
+    except Exception:
+        logger.debug("degeneracy probe failed for %s", path, exc_info=True)
+        return
+    if len(scores) == 1:
+        logger.warning(
+            "model at %s answers identically (%s) for every probe input - it "
+            "contributes a constant to every blended score, not a signal",
+            path, scores.pop(),
+        )
+
+
 class LiveScorer:
     """Scores requests against live session state.
 
@@ -157,6 +204,7 @@ class LiveScorer:
         session_ttl: int = 1800,
         short_circuit_label: str = "automated-integration",
         recorder: DecisionRecorder | None = None,
+        collector: DecisionSink | None = None,
         threshold_source: Callable[[], float | None] = lambda: None,
         promoted_source: Callable[[], frozenset[str]] = frozenset,
         deployment_id: str | None = None,
@@ -185,6 +233,11 @@ class LiveScorer:
         self._session_ttl = session_ttl
         self._short_circuit_label = short_circuit_label
         self._recorder = recorder
+        # Separate from the recorder on purpose. The recorder feeds the
+        # dashboard from a capped ring; the collector is the durable archive a
+        # training set gets built from. They have different lifetimes and
+        # different failure costs, so one is not a substitute for the other.
+        self._collector = collector
         self._threshold_source = threshold_source
         self._promoted_source = promoted_source
 
@@ -258,6 +311,7 @@ class LiveScorer:
             self._model = loaded
             self._active_mtime = mtime
             self.model_refused = None
+            _warn_if_degenerate(loaded, candidate)
             # Stamped after the load, not before: the interval measures time
             # since a COMPLETED check, so a slow or failed load does not buy
             # itself a free window. It also makes the double-check above
@@ -460,9 +514,14 @@ class LiveScorer:
         in the recorder must not become an outage — the same fail-open reasoning
         as server.py's scoring guard.
         """
-        if self._recorder is None:
-            return
-        try:
-            self._recorder.record(result)
-        except Exception:
-            logger.exception("decision recording failed, continuing")
+        if self._recorder is not None:
+            try:
+                self._recorder.record(result)
+            except Exception:
+                logger.exception("decision recording failed, continuing")
+
+        if self._collector is not None:
+            try:
+                self._collector.record(result)
+            except Exception:
+                logger.exception("decision collection failed, continuing")

@@ -157,7 +157,71 @@ dataset builder emits. Priority 3 trains on everything and reports training
 accuracy only — a number that tells you nothing about generalization.
 
 For a real deployment, label a sample of your own traffic by hand and evaluate
-against that.
+against that. The next section is how to gather it.
+
+## Collect real sessions, then label them
+
+This is the loop that produces a training set the model can honestly learn
+from. It exists because there is no human ground truth in the repo by any
+route — see
+[explanation-training-data.md](explanation-training-data.md#the-suspicion-above-measured)
+for the measurements.
+
+**1. Run observe-only and archive every decision.**
+
+```bash
+microguard serve --block-threshold 1.0 --collect-to ~/mg-collected.jsonl
+```
+
+`--block-threshold 1.0` with a strict `>` comparison means no score can ever
+exceed it: every request is scored and recorded, nothing is denied.
+
+`--collect-to` is required for this and off by default. The Redis event list
+cannot serve the purpose — `events.py` caps it at 1000 and `redis_events.py`
+LTRIMs to it, so it holds the most recent 1000 decisions and drops the rest
+without saying so. The archive is append-only JSONL, fsynced per row, and each
+row carries the 19 features, the score, the deciding heuristic rule, and the
+client IP. That last one is why collection is opt-in.
+
+Let it run for **at least 48 hours**. Bot traffic is diurnal and a six-hour
+sample will mislead you.
+
+**2. Review a sample by hand.**
+
+```bash
+microguard explain <ip>
+```
+
+prints the session, the resolved signals with their promotion state, the
+fingerprint state, and the rule that decided. Work through the sessions the
+shadow counter says a candidate threshold *would* have blocked, until the
+answers stop surprising you.
+
+**3. Confirm labels through the dashboard.**
+
+The feedback control writes confirmed labels via `record_correction`. This step
+is not optional and cannot be automated away: **a collected row is what the
+tool guessed, not a label.** Treating guesses as ground truth would train the
+model to reproduce `labeler.py`, and `compute_combined_score` blends model and
+heuristic — so one signal would be counted twice while reading as two
+independent ones. That is the mistake the current dataset already makes in a
+different form.
+
+**4. Retrain on the confirmed corrections.**
+
+```bash
+microguard retrain --deployment-id prod-1 --min-examples 50
+```
+
+It refuses below 50 corrections and refuses on class imbalance. Both refusals
+are correct: fifty hand-checked sessions cannot move an 85-parameter model
+without overfitting to them, and a one-sided set teaches a constant.
+
+**5. Check whether it actually moved.**
+
+Re-run your hand-labeled sample against the retrained model. If precision on
+your own traffic did not change, the corrections were not informative enough —
+collect more, and prefer sessions you disagreed with over ones you did not.
 
 ## Verification
 

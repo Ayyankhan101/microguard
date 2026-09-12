@@ -60,6 +60,39 @@ location / {
     proxy_pass http://your-backend;
 }
 
+# The fingerprint routes. PUBLIC, unlike the check endpoint below: a browser
+# has to be able to fetch the script and post its hash, so this location has no
+# `internal`. Optional — skip the whole block if you are not using
+# fingerprinting, and nothing else changes.
+#
+# The bounds are not decoration. This is the only public, body-accepting route
+# on the check server, and that server is a stdlib http.server which Python's
+# own docs say must not face the internet directly. nginx buffers the body and
+# enforces these limits, so the Python process only ever sees a small, complete
+# request.
+location /microguard/ {
+    proxy_pass http://127.0.0.1:8400/;
+
+    # A SHA-256 hex digest in a JSON envelope is about 100 bytes. microguard
+    # caps it again server-side; this stops the body reaching Python at all.
+    client_max_body_size  2k;
+    client_body_timeout   5s;
+    send_timeout          5s;
+    proxy_read_timeout    5s;
+
+    # One page load submits once. This is generous for a real visitor and
+    # useless for anyone trying to flood the endpoint.
+    limit_req zone=microguard_fp burst=5 nodelay;
+
+    proxy_set_header X-Real-IP $remote_addr;
+    # Same reasoning as the check endpoint: the hash is bound to this IP, and a
+    # spoofable value would let an attacker bind a hash to someone else.
+    proxy_set_header X-Forwarded-For "";
+}
+
+# Goes in the http {} block, alongside your other zones.
+# limit_req_zone $binary_remote_addr zone=microguard_fp:10m rate=30r/m;
+
 location = /_microguard_check {
     internal;
     proxy_pass http://127.0.0.1:8400/check;
@@ -143,6 +176,20 @@ returning something unexpected. Confirm it directly:
 ```bash
 curl -si http://127.0.0.1:8400/check -H "X-Real-IP: 1.2.3.4" | head -1
 ```
+
+**Never expose port 8400 directly.** Everything above assumes nginx is in
+front of it. The check server is a stdlib `http.server`, which has no request
+timeout and no cap on threads, and [Python's own
+documentation](https://docs.python.org/3/library/http.server.html) says it is
+not suitable for production use facing the internet. Behind nginx that is fine:
+nginx buffers, bounds and times out every request before Python sees it.
+
+**Fingerprinting needs HTTPS.** The script hashes in the browser using
+SubtleCrypto, which only exists in a secure context — HTTPS, or `localhost`. On
+a plain-HTTP origin the script logs a console warning and does nothing, so no
+fingerprint ever arrives. That matters because the absence rule reads a missing
+fingerprint as evidence, which would make an HTTP site look like it was full of
+bots. Either serve over HTTPS or leave the fingerprint rules unpromoted.
 
 If that works and nginx still 500s, check `proxy_pass` points at `/check` and the
 `location` is marked `internal`.

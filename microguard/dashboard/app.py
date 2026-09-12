@@ -21,7 +21,9 @@ from . import api_health, api_live, api_model, api_scan
 logger = logging.getLogger(__name__)
 
 
-def _redis_backends(redis_url: str) -> tuple[DecisionRecorder | None, object | None]:
+def _redis_backends(
+    redis_url: str,
+) -> tuple[DecisionRecorder | None, object | None, object | None]:
     """Connect to the Redis the live path writes to, or None if it is not there.
 
     An unreachable Redis is not a startup failure. `microguard serve` exits on
@@ -39,7 +41,7 @@ def _redis_backends(redis_url: str) -> tuple[DecisionRecorder | None, object | N
             "redis is not installed - live tab will be empty "
             "(pip install 'microguard[live]')"
         )
-        return None, None
+        return None, None, None
 
     try:
         client = redis.Redis.from_url(redis_url, decode_responses=True)
@@ -48,8 +50,8 @@ def _redis_backends(redis_url: str) -> tuple[DecisionRecorder | None, object | N
         logger.warning(
             "redis at %s is unreachable - live tab will be empty", redis_url
         )
-        return None, None
-    return RedisDecisionRecorder(client), RedisRuntimeConfig(client)
+        return None, None, None
+    return RedisDecisionRecorder(client), RedisRuntimeConfig(client), client
 
 
 def create_app(
@@ -58,6 +60,8 @@ def create_app(
     allow_config_writes: bool = False,
     static_dir: str | None = None,
     token: str | None = None,
+    deployment_id: str | None = None,
+    feedback_dir: str | None = None,
 ) -> FastAPI:
     """Build the dashboard app.
 
@@ -69,14 +73,21 @@ def create_app(
     app = FastAPI(title="Microguard Dashboard", version=__version__)
 
     runtime_config = None
+    client = None
     if recorder is None and redis_url:
-        recorder, runtime_config = _redis_backends(redis_url)
+        recorder, runtime_config, client = _redis_backends(redis_url)
     app.state.recorder = recorder if recorder is not None else InMemoryDecisionRecorder()
     app.state.redis_connected = not isinstance(
         app.state.recorder, InMemoryDecisionRecorder
     )
     app.state.runtime_config = runtime_config
+    app.state.redis = client
     app.state.allow_config_writes = allow_config_writes
+    # Corrections are per-deployment by definition: the whole point is
+    # adapting to ONE deployment's traffic, so without an id there is
+    # nothing to attribute them to and the endpoint reports that.
+    app.state.deployment_id = deployment_id
+    app.state.feedback_dir = feedback_dir
 
     if token:
         _require_token(app, token)

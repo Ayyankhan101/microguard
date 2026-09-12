@@ -19,13 +19,16 @@ afterEach(() => {
 
 describe('the API client', () => {
   it('parses a response through its schema', async () => {
-    vi.stubGlobal('fetch', respondWith({ version: '2.0.0', model_loaded: true, redis_connected: false }));
-
-    await expect(getHealth()).resolves.toEqual({
-      version: '2.0.0',
+    const payload = {
+      version: '3.0.0',
       model_loaded: true,
       redis_connected: false,
-    });
+      signals: { running: false, reason: 'no redis', sources: [] },
+      feedback_enabled: false,
+    };
+    vi.stubGlobal('fetch', respondWith(payload));
+
+    await expect(getHealth()).resolves.toEqual(payload);
   });
 
   it('rejects a response that does not match the schema', async () => {

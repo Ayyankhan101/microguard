@@ -105,3 +105,35 @@ export function suspiciouslyPerfect(confusion: {
   if (bots === 0 || humans === 0) return false;
   return confusion.fp === 0 && confusion.fn === 0;
 }
+
+/**
+ * How many of these decisions a candidate threshold would have blocked.
+ *
+ * The comparison is strict `>`, matching live/scorer.py: a score sitting
+ * exactly on the bar has not cleared it, which is what makes a threshold of
+ * 1.00 a real never-block setting rather than one that still blocks a
+ * saturated score.
+ *
+ * Computed from decisions already on screen rather than asked of the server,
+ * because every decision already carries the score it was judged on. That also
+ * means it answers instantly as the slider moves.
+ */
+export function wouldBlock(scores: number[], threshold: number): number {
+  return scores.filter((score) => score > threshold).length;
+}
+
+/**
+ * What changing the threshold to `candidate` would cost or save, against what
+ * actually happened.
+ *
+ * `delta` is the number that matters: an operator moving a slider wants to
+ * know how many MORE visitors get a 403, not the absolute count.
+ */
+export function thresholdImpact(
+  decisions: { score: number; label: string }[],
+  candidate: number,
+): { actual: number; projected: number; delta: number; sampled: number } {
+  const actual = decisions.filter((d) => d.label === 'bot').length;
+  const projected = wouldBlock(decisions.map((d) => d.score), candidate);
+  return { actual, projected, delta: projected - actual, sampled: decisions.length };
+}

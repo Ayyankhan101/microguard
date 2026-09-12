@@ -10,12 +10,15 @@ import asyncio
 import json
 import logging
 from collections.abc import AsyncIterator
+from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 
 from ..events import DecisionRecorder
+from ..signals import KNOWN_SIGNAL_SOURCES
+from ..training.online_update import record_correction
 
 logger = logging.getLogger(__name__)
 
@@ -52,11 +55,23 @@ async def decision_stream(
             if fingerprint in seen:
                 continue
             seen.add(fingerprint)
-            yield {"event": "decision", "data": json.dumps(decision)}
+            yield {"event": "decision", "data": json.dumps(_without_features(decision))}
 
         ticks += 1
         if _max_ticks is None or ticks < _max_ticks:
             await asyncio.sleep(poll_interval)
+
+
+def _without_features(decision: dict) -> dict:
+    """Strip the stored feature vector before a decision leaves the server.
+
+    The browser has no use for 19 floats per row -- it would be a third of the
+    payload for something nothing renders -- and the feedback endpoint reads
+    them server-side from the same record. Keeping them out of the response
+    also keeps a per-session behavioural vector from travelling further than
+    it needs to.
+    """
+    return {k: v for k, v in decision.items() if k != "features"}
 
 
 @router.get("/stats")
@@ -68,7 +83,11 @@ def stats(request: Request) -> dict:
 @router.get("/events")
 def events(request: Request, limit: int = Query(default=100, ge=1, le=MAX_EVENTS)) -> dict:
     """The most recent decisions, newest first."""
-    return {"events": request.app.state.recorder.recent(limit=limit)}
+    return {
+        "events": [
+            _without_features(d) for d in request.app.state.recorder.recent(limit=limit)
+        ]
+    }
 
 
 @router.get("/stream")
@@ -80,11 +99,17 @@ async def stream(request: Request) -> EventSourceResponse:
 
 
 class ConfigUpdate(BaseModel):
-    """A change to the live block threshold. None clears the override."""
+    """A change to live blocking configuration.
+
+    Both fields are absolute, not deltas: `block_threshold: null` clears the
+    override, and `promoted_signals: []` returns every signal to observe-only.
+    A PUT that omits a field leaves it alone.
+    """
 
     model_config = {"extra": "forbid"}
 
     block_threshold: float | None = Field(default=None, ge=0.0, le=1.0)
+    promoted_signals: list[str] | None = Field(default=None)
 
 
 @router.get("/config")
@@ -93,6 +118,10 @@ def read_config(request: Request) -> dict:
     config = request.app.state.runtime_config
     return {
         "block_threshold": config.block_threshold() if config is not None else None,
+        "promoted_signals": (
+            sorted(config.promoted_signals()) if config is not None else []
+        ),
+        "known_signals": sorted(KNOWN_SIGNAL_SOURCES),
         "writable": bool(request.app.state.allow_config_writes and config is not None),
     }
 
@@ -125,4 +154,92 @@ def write_config(request: Request, update: ConfigUpdate) -> dict:
     logger.warning(
         "live block_threshold changed: %s -> %s", previous, update.block_threshold
     )
-    return {"block_threshold": update.block_threshold, "writable": True}
+
+    if update.promoted_signals is not None:
+        try:
+            config.set_promoted_signals(set(update.promoted_signals))
+        except ValueError as exc:
+            # A typo must fail here rather than leaving the operator believing
+            # a signal is enforced while it quietly is not.
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        # Promotion is the moment a signal stops being a measurement and starts
+        # blocking real visitors. It belongs in the log at the same volume as
+        # a threshold change.
+        logger.warning("promoted signals changed to: %s", sorted(update.promoted_signals))
+
+    return {
+        "block_threshold": update.block_threshold,
+        "promoted_signals": sorted(config.promoted_signals()),
+        "known_signals": sorted(KNOWN_SIGNAL_SOURCES),
+        "writable": True,
+    }
+
+
+class FeedbackSubmission(BaseModel):
+    """An operator saying a recorded decision was wrong.
+
+    `label` is what the session ACTUALLY was, not what microguard said. That
+    reads more naturally at the click site ("this was a human") and leaves no
+    room for the off-by-one an "is_wrong" boolean invites.
+    """
+
+    model_config = {"extra": "forbid"}
+
+    decision_id: str = Field(min_length=1, max_length=64)
+    label: Literal["bot", "human"]
+
+
+@router.post("/feedback")
+def submit_feedback(request: Request, submission: FeedbackSubmission) -> dict:
+    """Record a correction against one decision.
+
+    Open by default, unlike the config writes above. A recorded correction
+    changes nothing until someone deliberately retrains, and the safety rails
+    in online_update refuse thin or skewed data at that point -- so the gate
+    belongs there, not here. Gating collection instead would leave the button
+    dark on a default install, and a retrain needs 50 corrections before it
+    will run at all.
+    """
+    deployment_id = getattr(request.app.state, "deployment_id", None)
+    if not deployment_id:
+        raise HTTPException(
+            status_code=503,
+            detail="Corrections are per-deployment. Start the dashboard with "
+            "--deployment-id to record them.",
+        )
+
+    recorder = request.app.state.recorder
+    decision = next(
+        (d for d in recorder.recent(MAX_EVENTS) if d.get("id") == submission.decision_id),
+        None,
+    )
+    if decision is None:
+        raise HTTPException(
+            status_code=404,
+            detail="No such decision. The feed keeps the most recent "
+            f"{MAX_EVENTS}; older ones cannot be corrected.",
+        )
+
+    features = decision.get("features")
+    if not features:
+        raise HTTPException(
+            status_code=422,
+            detail="That decision carries no features - nothing was scored for "
+            "it, so there is nothing to train on. Fail-open rows look like this.",
+        )
+
+    try:
+        record_correction(
+            deployment_id=deployment_id,
+            decision_id=submission.decision_id,
+            features=features,
+            confirmed_label=1.0 if submission.label == "bot" else 0.0,
+            feedback_dir=getattr(request.app.state, "feedback_dir", None),
+        )
+    except OSError as exc:
+        # Surfaced, never swallowed: an operator who clicked and saw nothing
+        # happen would click again, and the correction would still be lost.
+        logger.exception("could not record correction")
+        raise HTTPException(status_code=500, detail=f"Could not record: {exc}") from exc
+
+    return {"recorded": True, "decision_id": submission.decision_id}

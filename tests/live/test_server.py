@@ -5,6 +5,7 @@ import json
 import sys
 from unittest.mock import MagicMock, patch
 
+from microguard.live.fp_routes import MAX_FP_BODY_BYTES
 from microguard.live.server import CheckHandler, main, run_server
 
 
@@ -211,6 +212,7 @@ class TestRunServer:
             block_threshold=0.7,
             session_ttl=600,
             trust_forwarded_for=True,
+            deployment_id=None,
         )
 
         MockRedis.from_url.assert_called_once_with("redis://otherhost:6380", decode_responses=True)
@@ -238,6 +240,7 @@ class TestMain:
             block_threshold=0.85,
             session_ttl=1800,
             trust_forwarded_for=False,
+            deployment_id=None,
         )
 
     @patch("microguard.live.server.run_server")
@@ -263,6 +266,7 @@ class TestMain:
             block_threshold=0.7,
             session_ttl=600,
             trust_forwarded_for=True,
+            deployment_id=None,
         )
 
 
@@ -357,3 +361,109 @@ class TestUnknownRoutes:
 
         handler.send_response.assert_called_with(200)
         handler.scorer.score_request.assert_called_once()
+
+
+def _fp_handler(path="/fp", body=b"", content_length=None, redis_client=None, xri="1.2.3.4"):
+    """A CheckHandler wired for do_POST, with a real rfile carrying `body`."""
+    handler = _make_handler(path=path, xri=xri)
+    handler.command = "POST"
+    handler.rfile = io.BytesIO(body)
+    handler.redis_client = redis_client
+    declared = len(body) if content_length is None else content_length
+    real_get = handler.headers.get
+    handler.headers.get = lambda key, default="": (
+        str(declared) if key == "Content-Length" else real_get(key, default)
+    )
+    return handler
+
+
+class TestFingerprintPost:
+    """do_POST — the only writable route and the only public one with a body."""
+
+    def test_a_valid_submission_answers_200_json(self):
+        recorded = []
+        handler = _fp_handler(body=json.dumps({"fingerprint_hash": "a" * 64}).encode())
+        with patch("microguard.live.server.handle_fp_post") as fake:
+            fake.return_value = (200, b'{"ok":true}')
+            handler.do_POST()
+            recorded.append(fake.call_args)
+
+        handler.send_response.assert_called_once_with(200)
+        assert handler.wfile.getvalue() == b'{"ok":true}'
+        assert recorded[0].args[1] == "1.2.3.4"
+
+    def test_the_prefixed_path_is_accepted_too(self):
+        handler = _fp_handler(path="/microguard/fp", body=b"{}")
+        with patch("microguard.live.server.handle_fp_post") as fake:
+            fake.return_value = (200, b'{"ok":true}')
+            handler.do_POST()
+        fake.assert_called_once()
+
+    def test_a_query_string_does_not_defeat_the_route_match(self):
+        handler = _fp_handler(path="/fp?cb=123", body=b"{}")
+        with patch("microguard.live.server.handle_fp_post") as fake:
+            fake.return_value = (200, b'{"ok":true}')
+            handler.do_POST()
+        fake.assert_called_once()
+
+    def test_a_post_elsewhere_gets_the_explanatory_404(self):
+        handler = _fp_handler(path="/check", body=b"{}")
+        handler.do_POST()
+
+        handler.send_response.assert_called_once_with(404)
+        assert b"microguard check server" in handler.wfile.getvalue()
+
+    def test_a_declared_length_larger_than_the_cap_is_not_honored(self):
+        """A client that announces a huge body gets its announcement ignored.
+
+        Reading the declared length would let an unauthenticated caller make
+        this process allocate whatever it claimed -- in the one process whose
+        death is a 500 for every visitor.
+        """
+        handler = _fp_handler(body=b"x" * 5000, content_length=10_000_000)
+        with patch("microguard.live.server.handle_fp_post") as fake:
+            fake.return_value = (200, b'{"ok":true}')
+            handler.do_POST()
+
+        assert len(fake.call_args.args[2]) <= MAX_FP_BODY_BYTES + 1
+
+    def test_a_junk_content_length_is_treated_as_zero(self):
+        handler = _fp_handler(body=b"{}", content_length="not-a-number")
+        with patch("microguard.live.server.handle_fp_post") as fake:
+            fake.return_value = (200, b'{"ok":true}')
+            handler.do_POST()
+
+        assert fake.call_args.args[2] == b""
+
+    def test_a_negative_content_length_is_treated_as_zero(self):
+        handler = _fp_handler(body=b"{}", content_length=-5)
+        with patch("microguard.live.server.handle_fp_post") as fake:
+            fake.return_value = (200, b'{"ok":true}')
+            handler.do_POST()
+
+        assert fake.call_args.args[2] == b""
+
+
+class TestScriptRoute:
+    def test_the_script_is_served_with_a_javascript_content_type(self):
+        handler = _make_handler(path="/fingerprint.js")
+        handler.do_GET()
+
+        handler.send_response.assert_called_once_with(200)
+        headers = {c.args[0]: c.args[1] for c in handler.send_header.call_args_list}
+        assert headers["Content-Type"].startswith("application/javascript")
+        assert b"SHA-256" in handler.wfile.getvalue()
+
+    def test_the_script_is_cacheable(self):
+        """It changes only on deploy, and a revalidation per page load on
+        every visitor is real traffic through the process nginx waits on."""
+        handler = _make_handler(path="/microguard/fingerprint.js")
+        handler.do_GET()
+
+        headers = {c.args[0]: c.args[1] for c in handler.send_header.call_args_list}
+        assert "max-age" in headers["Cache-Control"]
+
+    def test_check_is_still_reachable_with_a_query_string(self):
+        handler = _make_handler(path="/check")
+        handler.do_GET()
+        handler.send_response.assert_called_once_with(200)

@@ -292,11 +292,87 @@ def main():
         help='Session expiry in seconds (default: 1800)'
     )
     serve_parser.add_argument(
+        '--deployment-id',
+        default=None,
+        help='Use this deployment\'s retrained model when one exists. Without '
+             'it the shipped baseline is always used.'
+    )
+    serve_parser.add_argument(
         '--trust-forwarded-for',
         action='store_true',
         help='Honor X-Forwarded-For for client IP. Only enable behind a proxy '
              'that overwrites it — the header is client-supplied, and a '
              'spoofable session key defeats detection.'
+    )
+
+    # retrain command — fine-tune on one deployment's own corrections
+    retrain_parser = subparsers.add_parser(
+        'retrain',
+        help="Fine-tune the model on one deployment's confirmed corrections"
+    )
+    retrain_parser.add_argument(
+        '--deployment-id',
+        required=True,
+        help='Which deployment to retrain. Corrections never mix across ids.'
+    )
+    retrain_parser.add_argument(
+        '--feedback-dir',
+        default=None,
+        help='Where corrections live (default: a user data directory)'
+    )
+    retrain_parser.add_argument(
+        '--min-examples',
+        type=int,
+        default=50,
+        help='Refuse to train below this many corrections (default: 50)'
+    )
+    retrain_parser.add_argument(
+        '--epochs',
+        type=int,
+        default=20,
+        help='Fine-tuning epochs (default: 20 — this is adaptation, not training)'
+    )
+
+    # signals command — the slow tier, out of the request path
+    signals_parser = subparsers.add_parser(
+        'signals',
+        help='Resolve threat-intel signals out of band (needs Redis)'
+    )
+    signals_parser.add_argument(
+        '--redis-url',
+        default='redis://localhost:6379',
+        help='Redis connection URL (default: redis://localhost:6379)'
+    )
+    signals_parser.add_argument(
+        '--interval',
+        type=int,
+        default=300,
+        help='Seconds between refresh passes (default: 300)'
+    )
+    signals_parser.add_argument(
+        '--session-ttl',
+        type=int,
+        default=1800,
+        help='Expiry for each written signal record (default: 1800)'
+    )
+
+    # explain command — why one actor got the verdict it did
+    explain_parser = subparsers.add_parser(
+        'explain',
+        help='Explain the current verdict for one IP (needs Redis)'
+    )
+    explain_parser.add_argument('ip', help='Client IP to explain')
+    explain_parser.add_argument(
+        '--redis-url',
+        default='redis://localhost:6379',
+        help='Redis connection URL (default: redis://localhost:6379)'
+    )
+    explain_parser.add_argument(
+        '--promote',
+        default='',
+        help='Comma-separated signal sources to treat as enforced, e.g. '
+             '"tor,abuseipdb". Default: none, so every signal reads as '
+             'observe-only.'
     )
 
     # dashboard command — API + built SPA on one port
@@ -334,6 +410,18 @@ def main():
         action='store_true',
         help='Let the dashboard change the live block threshold. Off by default '
              'because it decides who gets blocked on a running site.'
+    )
+
+    dashboard_parser.add_argument(
+        '--deployment-id',
+        default=None,
+        help='Enable the feedback control, recording corrections against this '
+             'deployment. Without it corrections have nothing to attribute to.'
+    )
+    dashboard_parser.add_argument(
+        '--feedback-dir',
+        default=None,
+        help='Where corrections are written (default: a user data directory)'
     )
 
     # probe command
@@ -569,7 +657,53 @@ def main():
             block_threshold=args.block_threshold,
             session_ttl=args.session_ttl,
             trust_forwarded_for=args.trust_forwarded_for,
+            deployment_id=args.deployment_id,
         )
+
+    elif args.command == 'retrain':
+        from .training.online_update import (
+            ClassImbalanceError,
+            InsufficientFeedbackError,
+            retrain_deployment_model,
+        )
+        try:
+            written = retrain_deployment_model(
+                deployment_id=args.deployment_id,
+                feedback_dir=args.feedback_dir,
+                min_examples=args.min_examples,
+                epochs=args.epochs,
+            )
+        except (InsufficientFeedbackError, ClassImbalanceError) as exc:
+            # Both rails are refusals, not crashes. Say what happened and what
+            # would change it, rather than printing a traceback at someone who
+            # just wanted a better model.
+            print(f"❌ Not retraining: {exc}", file=sys.stderr)
+            sys.exit(1)
+        print(f"✅ Retrained {args.deployment_id} -> {written}")
+        print("   The shipped baseline was not modified.")
+        print(f"   Restart is not needed: `microguard serve --deployment-id {args.deployment_id}`")
+        print("   picks it up within a few seconds. Roll back by deleting that file.")
+
+    elif args.command == 'signals':
+        from .live.signals_runner import main as run_signals
+        run_signals(
+            redis_url=args.redis_url,
+            interval=args.interval,
+            session_ttl=args.session_ttl,
+        )
+
+    elif args.command == 'explain':
+        import redis as _redis
+
+        from .live.explain import explain_actor
+        promoted = frozenset(p.strip() for p in args.promote.split(',') if p.strip())
+        try:
+            client = _redis.Redis.from_url(args.redis_url, decode_responses=True)
+            client.ping()
+        except _redis.RedisError as exc:
+            print(f"❌ Error: cannot reach Redis at {args.redis_url}: {exc}", file=sys.stderr)
+            sys.exit(1)
+        print(explain_actor(client, args.ip, promoted=promoted))
 
     elif args.command == 'dashboard':
         from .dashboard.server import run_dashboard
@@ -579,10 +713,12 @@ def main():
             redis_url=args.redis_url,
             allow_config_writes=args.allow_config_writes,
             token=args.token,
+            deployment_id=args.deployment_id,
+            feedback_dir=args.feedback_dir,
         )
 
     elif args.command == 'info':
-        print("🔍 Microguard v2.0.0")
+        print("🔍 Microguard v3.0.0")
         print("   Bot Traffic Audit Tool powered by micrograd")
         print()
         print("   Usage:")

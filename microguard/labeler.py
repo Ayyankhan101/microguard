@@ -8,6 +8,7 @@ import re
 
 from .features import BROWSER_UA_RE, Session
 from .parser import LogEntry
+from .signals import EMPTY_SIGNALS, Signals
 
 # High-confidence bot user agent patterns
 HIGH_CONFIDENCE_BOT_PATTERNS = [
@@ -107,6 +108,37 @@ SINGLE_ENDPOINT_API_RE = re.compile('|'.join(SINGLE_ENDPOINT_API_PATTERNS), re.I
 # browser page load, not a flood.
 MIN_RATE_WINDOW_S = 1.0
 MIN_RATE_REQUESTS = 5
+
+# AbuseIPDB reports a 0-100 confidence-of-abuse score. 75 is the value its own
+# docs treat as 'probably malicious'; below that the reports are thin enough
+# that a shared NAT address can accumulate one.
+THREAT_INTEL_ABUSE_THRESHOLD = 75.0
+
+# How long a session may run before a missing fingerprint means anything. A
+# real browser POSTs within milliseconds of parsing the tag; this is room for a
+# slow connection and a deferred script, not for the script itself.
+FINGERPRINT_GRACE_SECONDS = 5.0
+# And how many requests it must have made. One page view that never finished
+# loading is not evidence of anything.
+FINGERPRINT_MIN_REQUESTS = 3
+# Distinct IPs sharing one fingerprint inside the submission window before it
+# reads as a farm rather than a household behind one NAT.
+SHARED_FINGERPRINT_IPS = 5
+
+# Routes that would have served the script tag. A session that never touches
+# one never had the chance to run the script, so its missing fingerprint says
+# nothing -- a REST or GraphQL client is the obvious case, and flagging it
+# would reintroduce the single-endpoint-API false positive this project has
+# already fixed once.
+API_ROUTE_RE = re.compile(
+    r"^/(?:api|graphql|gql|rpc|v\d+|rest|oauth|auth|token|webhook)\b|"
+    r"^/[A-Za-z0-9_.]+\.[A-Za-z0-9_]+/[A-Za-z0-9_]+$",
+    re.IGNORECASE,
+)
+STATIC_ASSET_RE = re.compile(
+    r"\.(?:js|css|png|jpe?g|gif|svg|ico|woff2?|ttf|map|webp|avif|mp4|json|xml|txt)$",
+    re.IGNORECASE,
+)
 
 # gRPC calls are routed as POST /package.Service/Method — two path segments,
 # method name capitalized by convention, no file extension.
@@ -225,7 +257,93 @@ def _check_botnet_signatures(session: Session) -> tuple[bool, str]:
     return False, ''
 
 
-def label_session(session: Session) -> tuple[str, float, str]:
+def _looks_like_page_traffic(urls: list[str]) -> bool:
+    """Whether this actor ever requested something that serves HTML.
+
+    Any single page request is enough: that is where the script tag lives, so
+    one is all it takes for a real browser to have had the chance to run it.
+    Requiring more would exempt a bot that loads exactly one page.
+    """
+    return any(
+        not API_ROUTE_RE.search(url) and not STATIC_ASSET_RE.search(url)
+        for url in urls
+    )
+
+
+def _check_fingerprint_signals(
+    session: Session, signals: Signals, urls: list[str]
+) -> tuple[bool, float, str]:
+    """Verdict from client-side fingerprint evidence.
+
+    Two rules of opposite kinds. Rule 2 is positive evidence -- one browser
+    profile arriving from many addresses -- and applies to any session. Rule 1
+    is an inference from ABSENCE, which is far weaker and far easier to get
+    wrong, so it is gated three ways: the pipeline must actually have been
+    consulted, the session must have had a real chance to run the script, and
+    it must have had time to.
+    """
+    if not signals.is_promoted("fingerprint"):
+        return False, 0.0, ""
+
+    if signals.shared_hash_ips >= SHARED_FINGERPRINT_IPS:
+        return (
+            True,
+            0.90,
+            f"one browser fingerprint across {signals.shared_hash_ips} distinct IPs",
+        )
+
+    if (
+        signals.fingerprint_hash is None
+        and session.request_count >= FINGERPRINT_MIN_REQUESTS
+        and session.duration >= FINGERPRINT_GRACE_SECONDS
+        and _looks_like_page_traffic(urls)
+    ):
+        return (
+            True,
+            0.80,
+            f"no fingerprint after {session.duration:.0f}s of page traffic",
+        )
+
+    return False, 0.0, ""
+
+
+def _check_threat_intel_signals(signals: Signals) -> tuple[bool, float, str]:
+    """Verdict from externally resolved reputation data, if any applies.
+
+    Reads only from `signals`. It never looks anything up: this runs inline on
+    every nginx `auth_request`, and a lookup here would put a network round
+    trip in front of a real visitor.
+
+    Two gates before any source is consulted, both inside `is_promoted`:
+    the data must have actually been resolved (in a batch scan it never is),
+    and the deployment must have promoted that source out of observe-only.
+
+    Returns (matched, confidence, reason).
+    """
+    if signals.is_promoted("tor") and signals.tor_exit:
+        # Not 0.90. Real people use Tor, so this blocks only when the model
+        # agrees: compute_combined_score floors a confident bot at its own
+        # confidence, and the live threshold is a strict `> 0.85`.
+        return True, 0.85, "Tor exit node"
+
+    if (
+        signals.is_promoted("abuseipdb")
+        and signals.abuse_score is not None
+        and signals.abuse_score >= THREAT_INTEL_ABUSE_THRESHOLD
+    ):
+        return True, 0.90, f"AbuseIPDB abuse score {signals.abuse_score:.0f}"
+
+    # `signals.hosting_range` is deliberately not enforced. A datacenter IP is
+    # weak evidence on its own -- plenty of legitimate API clients live there --
+    # and spec 0002 left the combination rule open precisely because choosing
+    # it needs real traffic rather than a guess. It is resolved and recorded so
+    # the evidence can be gathered; it decides nothing until it can be.
+    return False, 0.0, ""
+
+
+def label_session(
+    session: Session, signals: Signals = EMPTY_SIGNALS
+) -> tuple[str, float, str]:
     """Label a session as 'bot', 'human', or 'automated-integration' with confidence.
 
     Returns:
@@ -298,7 +416,22 @@ def label_session(session: Session) -> tuple[str, float, str]:
     botnet_bot, botnet_reason = _check_botnet_signatures(session)
     if botnet_bot:
         return 'bot', 0.88, botnet_reason
-    
+
+    # 8. Externally resolved reputation, checked here rather than higher up.
+    # Chain order is semantics in this function, and everything above is a
+    # direct local observation of this actor's own traffic. A third-party
+    # lookup should not be able to relabel one of those.
+    ti_bot, ti_conf, ti_reason = _check_threat_intel_signals(signals)
+    if ti_bot:
+        return 'bot', ti_conf, f'threat intel: {ti_reason}'
+
+    # 9. Client-side fingerprint evidence, checked alongside threat intel for
+    # the same reason: a direct observation of this actor's own traffic should
+    # not be relabelled by a signal resolved somewhere else.
+    fp_bot, fp_conf, fp_reason = _check_fingerprint_signals(session, signals, urls)
+    if fp_bot:
+        return 'bot', fp_conf, f'fingerprint: {fp_reason}'
+
     # === MEDIUM CONFIDENCE BOT SIGNALS (0.70-0.89) ===
     
     # 5. Very high request rate (>100 requests in session)

@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from typing import Protocol, runtime_checkable
 
 from ..parser import LogEntry
+from ..signals import EMPTY_SIGNALS, Signals
 
 
 @dataclass
@@ -55,6 +56,24 @@ class LiveSession:
         return 0.0
 
 
+@dataclass(frozen=True)
+class SessionSnapshot:
+    """Everything one actor's storage knows, read in a single round trip.
+
+    `record_request` returns this rather than a bare LiveSession because the
+    signals resolved for an actor are needed by the same scoring call, and
+    fetching them separately would mean a second Redis round trip on the one
+    path that runs for every visitor request behind nginx `auth_request`. On a
+    remote Redis that is the difference between one 15ms wait and two.
+
+    `signals` defaults to EMPTY_SIGNALS, which reads as "not looked up" rather
+    than "looked up and clean" — the distinction every signal rule depends on.
+    """
+
+    session: LiveSession
+    signals: Signals = EMPTY_SIGNALS
+
+
 @runtime_checkable
 class SessionStateStore(Protocol):
     """Protocol for session state backends.
@@ -74,11 +93,12 @@ class SessionStateStore(Protocol):
         user_agent: str,
         entry: LogEntry,
         ttl_seconds: int | None = None,
-    ) -> LiveSession:
-        """Atomically append entry to this actor's session and return it.
+    ) -> SessionSnapshot:
+        """Atomically append entry and return this actor's full state.
 
         Creates the session if absent, refreshes its TTL, and caps its history.
-        The returned session is the post-append state, ready to score.
+        The returned snapshot holds the post-append session, ready to score,
+        and whatever signals were already resolved for this actor.
         """
         ...
 

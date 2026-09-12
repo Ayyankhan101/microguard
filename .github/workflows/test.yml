@@ -41,7 +41,18 @@ jobs:
         # tests that passed for the wrong reason, not by padding; without a
         # gate that erodes on the next PR. Two points of headroom so a
         # legitimate pragma-less branch does not block a merge.
-        run: python -m pytest tests/ -v --tb=short --cov=microguard --cov-report=term-missing --cov-fail-under=98
+        #
+        # microguard/live is omitted HERE and gated in the `live` job instead.
+        # There is no Redis on this runner, so every Redis-backed test skips and
+        # this job cannot execute that code at all. Measuring it here does not
+        # gate anything -- it just reports a number that falls as the live path
+        # grows, which is what it did: 93% on a branch that is 100% covered when
+        # the tests can actually run. The code is still gated, by a job that can
+        # run it.
+        run: >
+          python -m pytest tests/ -v --tb=short
+          --cov=microguard --cov-report=term-missing --cov-fail-under=98
+          --cov-config=.coveragerc-matrix
 
       - name: Test CLI
         shell: bash
@@ -93,10 +104,17 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -e ".[live,fastapi,flask,dashboard]"
-          pip install pytest httpx httpx2
+          # pytest-cov: this job carries the coverage gate for microguard/live,
+          # which the matrix cannot measure without a Redis.
+          pip install pytest pytest-cov httpx httpx2
 
       - name: Run live suite against a real Redis
-        run: python -m pytest tests/live/ -v --tb=short
+        # Coverage for microguard/live is gated HERE, because this is the only
+        # job with a Redis to run it against. The matrix omits it for exactly
+        # that reason. Between the two jobs every line is still gated.
+        run: >
+          python -m pytest tests/live/ -v --tb=short
+          --cov=microguard.live --cov-report=term-missing --cov-fail-under=98
 
       - name: Fail if the live suite silently skipped
         run: |
@@ -106,6 +124,45 @@ jobs:
           python -m pytest tests/live/ -q -rs 2>&1 | tee /tmp/live.txt
           if grep -q "Redis not available" /tmp/live.txt; then
             echo "::error::live suite skipped - the Redis service did not come up"
+            exit 1
+          fi
+
+  browser:
+    # The fingerprint script makes two claims no other test can check: that the
+    # hash actually varies with the environment, and that only the hash leaves
+    # the page. Canvas and WebGL do not exist under Node, so a unit test would
+    # pass with every probe returning a constant.
+    #
+    # One runner, not the matrix: downloading a browser twelve times to assert
+    # the same JavaScript behavior buys nothing.
+    name: browser (fingerprint)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[live]"
+          pip install pytest playwright
+          python -m playwright install --with-deps chromium
+
+      - name: Run the browser suite
+        run: python -m pytest tests/browser/ -v --tb=short
+
+      - name: Fail if the browser suite silently skipped
+        run: |
+          # A skipped browser suite looks identical to a passing one. This job
+          # exists to run it, so a skip is a failure here.
+          python -m pytest tests/browser/ -q -rs 2>&1 | tee /tmp/browser.txt
+          if grep -qE "need playwright|chromium not installed" /tmp/browser.txt; then
+            echo "::error::browser suite skipped - playwright or chromium is missing"
             exit 1
           fi
 

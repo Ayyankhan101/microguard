@@ -234,3 +234,74 @@ class TestConcurrentRequests:
         # 8 requests, each a Redis round trip plus a model forward pass.
         # Generous ceiling — this catches serialization, not slow hardware.
         assert elapsed < 5.0, f"8 concurrent checks took {elapsed:.2f}s"
+
+
+def _post_fp(port, ip, body):
+    """POST a fingerprint body and return the status, never raising for 4xx."""
+    request = urllib.request.Request(
+        f"http://127.0.0.1:{port}/fp",
+        data=body,
+        headers={"Content-Type": "application/json", "X-Real-IP": ip},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=5) as response:
+            return response.status
+    except urllib.error.HTTPError as exc:
+        return exc.code
+
+
+class TestFingerprintRoutes:
+    """The two public routes, against the real running process.
+
+    These exercise BaseHTTPRequestHandler's do_POST and the static route end
+    to end -- the parts test_fp_routes.py cannot reach, because it stops at
+    the handler function.
+    """
+
+    def test_the_script_is_served(self, server):
+        url = f"http://127.0.0.1:{server['port']}/fingerprint.js"
+        with urllib.request.urlopen(url, timeout=5) as response:
+            body = response.read()
+            assert response.status == 200
+            assert response.headers["Content-Type"].startswith("application/javascript")
+        assert b"SHA-256" in body
+
+    def test_the_prefixed_script_path_works_too(self, server):
+        """nginx may or may not strip the location prefix, depending on whether
+        proxy_pass carries a trailing path. Both spellings answer, because an
+        operator who gets that subtly wrong should not get a silently dead
+        fingerprint pipeline."""
+        url = f"http://127.0.0.1:{server['port']}/microguard/fingerprint.js"
+        with urllib.request.urlopen(url, timeout=5) as response:
+            assert response.status == 200
+
+    def test_a_fingerprint_from_a_known_actor_is_recorded(self, server):
+        ip = "203.0.113.77"
+        # Give the actor a session first: /fp only binds a hash to an IP that
+        # already has history (decision 7A).
+        _check(server["port"], ip=ip, ua="Mozilla/5.0", url="/products")
+
+        body = json.dumps({"fingerprint_hash": "c" * 64}).encode()
+        assert _post_fp(server["port"], ip, body) == 200
+
+        stored = server["redis"].get(f"mg:v1:fp:{ip}")
+        assert json.loads(stored)["hash"] == "c" * 64
+
+    def test_an_unknown_actor_is_refused_without_an_error(self, server):
+        ip = "198.51.100.123"
+        body = json.dumps({"fingerprint_hash": "d" * 64}).encode()
+
+        assert _post_fp(server["port"], ip, body) == 200
+        assert server["redis"].get(f"mg:v1:fp:{ip}") is None
+
+    def test_an_oversized_body_is_refused(self, server):
+        assert _post_fp(server["port"], "203.0.113.78", b"x" * 200_000) == 200
+
+    def test_a_post_to_an_unknown_path_still_explains_itself(self, server):
+        request = urllib.request.Request(
+            f"http://127.0.0.1:{server['port']}/nope", data=b"{}"
+        )
+        with pytest.raises(urllib.error.HTTPError) as exc:
+            urllib.request.urlopen(request, timeout=5)
+        assert exc.value.code == 404
+        assert b"microguard check server" in exc.value.read()

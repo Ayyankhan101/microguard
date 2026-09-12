@@ -8,10 +8,23 @@ payloads. Requires `pip install microguard[live]`.
 
     One append == one pipeline, four commands, one round trip:
 
-        RPUSH  live:v2:{ip}  <entry json>     append
-        LTRIM  live:v2:{ip}  -200 -1          cap history
-        EXPIRE live:v2:{ip}  <ttl>            slide the expiry window
-        LRANGE live:v2:{ip}  0 -1             read back for scoring
+        RPUSH  live:v2:{ip}      <entry json>   append
+        LTRIM  live:v2:{ip}      -200 -1        cap history
+        EXPIRE live:v2:{ip}      <ttl>          slide the expiry window
+        LRANGE live:v2:{ip}      0 -1           read back for scoring
+        GET    mg:v1:signals:{ip}               resolved signals, same trip
+        GET    mg:v1:fp:{ip}                    bound fingerprint, same trip
+
+    Fingerprint state is a separate key rather than a field on the signals
+    record because the two have different writers: the refresher SETs the
+    signals key wholesale on every pass, so a fingerprint stored inside it
+    would be clobbered. Both reads ride the same pipeline, so the split costs
+    nothing here.
+
+    The signal reads ride along in the same pipeline rather than being their
+    own calls. Scoring needs both, and this runs for every request behind nginx
+    `auth_request`, so a second round trip would double the dominant cost of
+    the whole path on any Redis that is not on localhost.
 
 Why a LIST and not a JSON blob (the v1 shape):
 
@@ -38,7 +51,8 @@ import json
 import redis
 
 from ..parser import LogEntry
-from .state import LiveSession
+from ..signals import EMPTY_SIGNALS, signals_from_payload
+from .state import LiveSession, SessionSnapshot
 
 # Type alias for redis client — redis-py's client type hierarchy is complex
 # and version-dependent; duck-typing is simpler here.
@@ -49,6 +63,10 @@ RedisClient = redis.Redis  # type: ignore[type-arg]
 # re-reads and re-features the whole retained list, at roughly 2ms per request
 # at this size. This is the tuning lever if that cost matters.
 MAX_SESSION_ENTRIES = 200
+
+# The default key prefix, named so read-only tools (explain) can reach a
+# session without constructing a store that would record one.
+SESSION_PREFIX_DEFAULT = "live:v2:"
 
 
 def _session_from(ip: str, user_agent: str, raw_entries: list) -> LiveSession:
@@ -81,21 +99,73 @@ def _session_from(ip: str, user_agent: str, raw_entries: list) -> LiveSession:
     return session
 
 
+def _signals_from(raw: str | None):
+    """Decode the stored signal payload, or report nothing was resolved.
+
+    Every failure path returns EMPTY_SIGNALS rather than raising. This runs on
+    the request path, and a signal that cannot be read is a missing signal, not
+    a reason to stop scoring.
+    """
+    if not raw:
+        return EMPTY_SIGNALS
+    try:
+        return signals_from_payload(json.loads(raw))
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return EMPTY_SIGNALS
+
+
+def _with_fingerprint(signals, raw: str | None):
+    """Attach this actor's bound fingerprint, if the pipeline read one.
+
+    `fp_resolved` is set unconditionally: the read happened. That is the whole
+    point of the flag -- rule 1 infers automation from an absent fingerprint,
+    and it must be able to tell "read, and there was none" from "never read",
+    which is what a batch scan looks like.
+    """
+    from dataclasses import replace
+
+    fingerprint_hash = None
+    shared = 0
+    if raw:
+        try:
+            payload = json.loads(raw)
+            fingerprint_hash = payload.get("hash")
+            shared = int(payload.get("shared_ips", 0))
+        except (json.JSONDecodeError, AttributeError, TypeError, ValueError):
+            fingerprint_hash, shared = None, 0
+    return replace(
+        signals,
+        fp_resolved=True,
+        fingerprint_hash=fingerprint_hash,
+        shared_hash_ips=shared,
+    )
+
+
 class RedisSessionStateStore:
     """Redis-backed implementation of SessionStateStore."""
 
     def __init__(
         self,
         redis_client: RedisClient,
-        prefix: str = "live:v2:",
+        prefix: str = SESSION_PREFIX_DEFAULT,
         default_ttl: int = 1800,
+        signals_prefix: str = "mg:v1:signals:",
+        fp_prefix: str = "mg:v1:fp:",
     ):
         self._r = redis_client
         self._prefix = prefix
         self._default_ttl = default_ttl
+        self._signals_prefix = signals_prefix
+        self._fp_prefix = fp_prefix
 
     def _session_key(self, ip: str) -> str:
         return f"{self._prefix}{ip}"
+
+    def _signals_key(self, ip: str) -> str:
+        return f"{self._signals_prefix}{ip}"
+
+    def _fp_key(self, ip: str) -> str:
+        return f"{self._fp_prefix}{ip}"
 
     def record_request(
         self,
@@ -103,8 +173,8 @@ class RedisSessionStateStore:
         user_agent: str,
         entry: LogEntry,
         ttl_seconds: int | None = None,
-    ) -> LiveSession:
-        """Atomically append entry to this actor's session and return it."""
+    ) -> SessionSnapshot:
+        """Atomically append entry and return this actor's full state."""
         key = self._session_key(ip)
         ttl = ttl_seconds or self._default_ttl
 
@@ -113,9 +183,14 @@ class RedisSessionStateStore:
         pipe.ltrim(key, -MAX_SESSION_ENTRIES, -1)
         pipe.expire(key, ttl)
         pipe.lrange(key, 0, -1)
-        *_, raw_entries = pipe.execute()
+        pipe.get(self._signals_key(ip))
+        pipe.get(self._fp_key(ip))
+        *_, raw_entries, raw_signals, raw_fp = pipe.execute()
 
-        return _session_from(ip, user_agent, raw_entries)
+        return SessionSnapshot(
+            session=_session_from(ip, user_agent, raw_entries),
+            signals=_with_fingerprint(_signals_from(raw_signals), raw_fp),
+        )
 
     def delete(self, ip: str) -> None:
         """Explicitly remove a session."""

@@ -91,7 +91,7 @@ describe('LiveTab', () => {
     stub({
       '/api/live/events': { events: [] },
       '/api/live/stats': liveStats,
-      '/api/live/config': { block_threshold: null, writable: false },
+      '/api/live/config': { block_threshold: null, promoted_signals: [], known_signals: ['tor'], writable: false },
     });
 
     renderWithClient(<LiveTab />);
@@ -103,7 +103,7 @@ describe('LiveTab', () => {
     stub({
       '/api/live/events': liveEvents,
       '/api/live/stats': liveStats,
-      '/api/live/config': { block_threshold: null, writable: false },
+      '/api/live/config': { block_threshold: null, promoted_signals: [], known_signals: ['tor'], writable: false },
     });
 
     renderWithClient(<LiveTab />);
@@ -115,7 +115,7 @@ describe('LiveTab', () => {
     stub({
       '/api/live/events': { events: [] },
       '/api/live/stats': liveStats,
-      '/api/live/config': { block_threshold: 0.85, writable: false },
+      '/api/live/config': { block_threshold: 0.85, promoted_signals: [], known_signals: ['tor'], writable: false },
     });
 
     renderWithClient(<LiveTab />);
@@ -127,7 +127,7 @@ describe('LiveTab', () => {
     stub({
       '/api/live/events': { events: [] },
       '/api/live/stats': liveStats,
-      '/api/live/config': { block_threshold: 0.85, writable: true },
+      '/api/live/config': { block_threshold: 0.85, promoted_signals: [], known_signals: ['tor'], writable: true },
     });
 
     renderWithClient(<LiveTab />);

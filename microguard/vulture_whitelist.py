@@ -29,6 +29,7 @@ MicroguardWSGI
 
 # BaseHTTPRequestHandler dispatch + override; called by http.server, not by us.
 CheckHandler.do_GET
+CheckHandler.do_POST
 CheckHandler.log_message
 
 # socketserver.ThreadingMixIn reads self.daemon_threads in process_request;
@@ -54,6 +55,7 @@ api_model.evaluate
 api_live.stats
 api_live.events
 api_live.stream
+api_live.submit_feedback
 api_live.read_config
 api_live.write_config
 

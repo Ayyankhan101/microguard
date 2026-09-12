@@ -11,8 +11,13 @@
       "request_count": 1,
       "duration": 0.0,
       "model_loaded": true,
+      "model_refused": null,
       "block_threshold": 0.85,
       "reason": "known bot/monitoring UA: curl/8.0",
+      "signals": {
+        "resolved": false
+      },
+      "id": "00000000000000000000000000000000",
       "ts": 1700000000.0
     },
     {
@@ -26,8 +31,13 @@
       "request_count": 1,
       "duration": 0.0,
       "model_loaded": true,
+      "model_refused": null,
       "block_threshold": 0.85,
       "reason": "known bot/monitoring UA: python-requests/2.28.0",
+      "signals": {
+        "resolved": false
+      },
+      "id": "00000000000000000000000000000000",
       "ts": 1700000000.0
     },
     {
@@ -41,8 +51,13 @@
       "request_count": 5,
       "duration": 34.0,
       "model_loaded": true,
+      "model_refused": null,
       "block_threshold": 0.85,
       "reason": "known browser, reasonable session (5 req, 34s)",
+      "signals": {
+        "resolved": false
+      },
+      "id": "00000000000000000000000000000000",
       "ts": 1700000000.0
     },
     {
@@ -56,8 +71,13 @@
       "request_count": 4,
       "duration": 20.0,
       "model_loaded": true,
+      "model_refused": null,
       "block_threshold": 0.85,
       "reason": "natural navigation with 4 referrers",
+      "signals": {
+        "resolved": false
+      },
+      "id": "00000000000000000000000000000000",
       "ts": 1700000000.0
     },
     {
@@ -71,8 +91,13 @@
       "request_count": 3,
       "duration": 11.0,
       "model_loaded": true,
+      "model_refused": null,
       "block_threshold": 0.85,
       "reason": "natural navigation with 3 referrers",
+      "signals": {
+        "resolved": false
+      },
+      "id": "00000000000000000000000000000000",
       "ts": 1700000000.0
     },
     {
@@ -86,8 +111,13 @@
       "request_count": 2,
       "duration": 4.0,
       "model_loaded": true,
+      "model_refused": null,
       "block_threshold": 0.85,
       "reason": "no strong signals either way",
+      "signals": {
+        "resolved": false
+      },
+      "id": "00000000000000000000000000000000",
       "ts": 1700000000.0
     },
     {
@@ -101,8 +131,13 @@
       "request_count": 1,
       "duration": 0.0,
       "model_loaded": true,
+      "model_refused": null,
       "block_threshold": 0.85,
       "reason": "no strong signals either way",
+      "signals": {
+        "resolved": false
+      },
+      "id": "00000000000000000000000000000000",
       "ts": 1700000000.0
     }
   ]

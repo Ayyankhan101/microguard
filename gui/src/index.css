@@ -767,3 +767,68 @@ input[type='range'] {
     grid-column: 1 / -1;
   }
 }
+
+/* Signal enforcement: which sources may decide a verdict. Sits with the
+   threshold slider because both change who gets a 403 on a live site. */
+.signal-promotion {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.signal-promotion__row {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.3rem 0.4rem;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.85rem;
+}
+
+.signal-promotion__row:hover {
+  background: var(--overlay);
+}
+
+.signal-promotion__row input:disabled {
+  cursor: not-allowed;
+}
+
+.signal-promotion__row:has(input:disabled) {
+  cursor: not-allowed;
+  opacity: 0.65;
+}
+
+/* Correcting a verdict. Sits in the decision detail panel: the row itself is
+   a button for selection, and nesting interactive elements is invalid HTML. */
+.feedback {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+.feedback__btn {
+  padding: 0.15rem 0.5rem;
+  font-size: 0.8rem;
+  font-family: inherit;
+  border: 1px solid var(--row-border);
+  border-radius: 4px;
+  background: var(--overlay);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.feedback__btn:hover:not(:disabled) {
+  background: var(--overlay-strong);
+}
+
+.feedback__btn--muted {
+  color: var(--text-muted);
+}
+
+.feedback__btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}

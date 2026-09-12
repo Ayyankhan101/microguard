@@ -23,7 +23,7 @@ from microguard.cli import scan_logfile
 from microguard.dashboard.app import create_app
 from microguard.events import InMemoryDecisionRecorder
 from microguard.live.scorer import LiveScorer
-from microguard.live.state import LiveSession, SessionStateStore
+from microguard.live.state import LiveSession, SessionSnapshot, SessionStateStore
 from microguard.parser import LogEntry, parse_file
 
 FIXTURE_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src", "api", "__fixtures__")
@@ -44,7 +44,8 @@ class _MemoryStore(SessionStateStore):
         session.requests.append(entry)
         session.start_time = session.requests[0].timestamp.timestamp()
         session.end_time = session.requests[-1].timestamp.timestamp()
-        return session
+        # No signals: a capture must not depend on a refresher having run.
+        return SessionSnapshot(session=session)
 
     def delete(self, ip):
         self._sessions.pop(ip, None)
@@ -54,14 +55,26 @@ class _MemoryStore(SessionStateStore):
 # make the CI drift check useless. They are pinned; the schemas only care about
 # the type.
 FIXED_TIMESTAMP = 1_700_000_000.0
+# Decision ids are uuid4, so they differ on every capture for the same reason.
+# Pinned to a well-formed hex id: the schema checks the type, and a recognisable
+# placeholder makes it obvious in the fixture that this value is synthetic.
+FIXED_DECISION_ID = "0" * 32
 
 
 def _stabilize(payload):
-    """Replace wall-clock fields with a fixed value, recursively."""
+    """Replace values that change on every run with fixed ones, recursively.
+
+    Anything non-deterministic here makes the CI drift check permanently red:
+    it recaptures and diffs, so a field that differs every run can never match
+    the committed fixture. Wall-clock stamps did this once; decision ids are
+    the same problem with a different type.
+    """
     if isinstance(payload, dict):
         return {
             key: FIXED_TIMESTAMP
             if key in ("ts", "started_at") and isinstance(value, (int, float))
+            else FIXED_DECISION_ID
+            if key == "id" and isinstance(value, str)
             else _stabilize(value)
             for key, value in payload.items()
         }

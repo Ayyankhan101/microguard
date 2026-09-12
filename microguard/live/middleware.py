@@ -17,6 +17,7 @@ Usage (Flask):
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from datetime import datetime, timezone
@@ -25,30 +26,19 @@ from typing import Any
 import redis
 
 from ..parser import LogEntry
+from .fp_routes import (
+    FP_PATHS,
+    MAX_FP_BODY_BYTES,
+    SCRIPT_PATHS,
+    fingerprint_script,
+    handle_fp_post,
+)
 from .redis_events import RedisDecisionRecorder
 from .redis_store import RedisSessionStateStore
 from .runtime_config import RedisRuntimeConfig
-from .scorer import BLOCK_THRESHOLD_DEFAULT, LiveScorer
+from .scorer import BLOCK_THRESHOLD_DEFAULT, LiveScorer, fail_open_result
 
 logger = logging.getLogger(__name__)
-
-# Same shape as a real decision, so downstream consumers never special-case it.
-_FAIL_OPEN = {
-    "ip": "",
-    "label": "human",
-    "score": 0.0,
-    "model_score": 0.0,
-    "heuristic_label": "unknown",
-    "heuristic_confidence": 0.0,
-    "heuristic_reason": "scoring unavailable",
-    "reason": "scoring unavailable",
-    "request_count": 0,
-    "duration": 0.0,
-    "model_loaded": False,
-    # No threshold was consulted, and saying otherwise would let a dashboard
-    # plot a bar this decision never met.
-    "block_threshold": None,
-}
 
 # --- ASGI Middleware (FastAPI / Starlette) ---
 
@@ -75,6 +65,7 @@ class MicroguardASGI:
         self._trust_xff = trust_forwarded_for
         self._r = redis.Redis.from_url(redis_url, decode_responses=True)
         self._store = RedisSessionStateStore(self._r, default_ttl=session_ttl)
+        _config = RedisRuntimeConfig(self._r)
         self._scorer = LiveScorer(
             self._store,
             block_threshold=block_threshold,
@@ -83,7 +74,10 @@ class MicroguardASGI:
             # deployment shows up in `microguard dashboard` too — and honors a
             # threshold moved from it without a restart.
             recorder=RedisDecisionRecorder(self._r),
-            threshold_source=RedisRuntimeConfig(self._r).block_threshold,
+            threshold_source=_config.block_threshold,
+            # Without this, decision 10A's observe-only posture is
+            # permanent: every signal is measured and none can decide.
+            promoted_source=_config.promoted_signals,
         )
 
     async def __call__(self, scope: dict, receive: Any, send: Any) -> None:
@@ -98,6 +92,17 @@ class MicroguardASGI:
         ua = _decode_header(headers.get(b"user-agent", b""))
         method = scope.get("method", "GET")
         path = scope.get("path", "/")
+
+        # The two public fingerprint routes are answered here rather than
+        # passed through. Without this, fingerprinting would exist only in the
+        # `microguard serve` deployment mode, and the epic requires both modes
+        # to carry the same capability.
+        if path in SCRIPT_PATHS:
+            await _asgi_send_script(send)
+            return
+        if path in FP_PATHS:
+            await self._asgi_fingerprint(scope, receive, send)
+            return
 
         entry = LogEntry(
             ip=ip,
@@ -115,7 +120,7 @@ class MicroguardASGI:
         except Exception:
             # Fail open: a Redis outage must not 500 every request.
             logger.exception("scoring failed, allowing request")
-            result = dict(_FAIL_OPEN)
+            result = fail_open_result()
 
         if result["label"] == "bot":
             body = json.dumps(result).encode()
@@ -144,6 +149,50 @@ class MicroguardASGI:
             await self.app(scope, receive, send)
 
 
+    async def _asgi_fingerprint(self, scope: dict, receive: Any, send: Any) -> None:
+        body = b""
+        while len(body) <= MAX_FP_BODY_BYTES:
+            message = await receive()
+            body += message.get("body", b"")
+            if not message.get("more_body"):
+                break
+
+        headers = {k.decode().lower(): v.decode() for k, v in scope.get("headers", [])}
+        ip = _extract_ip(headers, self._trust_xff, _asgi_client(scope))
+        # Off the event loop: handle_fp_post talks to Redis synchronously,
+        # and /fp is the public route -- every page load fires one, so a
+        # blocking call here serializes every concurrent request behind it.
+        status, payload = await asyncio.to_thread(handle_fp_post, self._r, ip, body)
+        await send({
+            "type": "http.response.start",
+            "status": status,
+            "headers": [
+                [b"content-type", b"application/json"],
+                [b"content-length", str(len(payload)).encode()],
+            ],
+        })
+        await send({"type": "http.response.body", "body": payload})
+
+
+def _asgi_client(scope: dict) -> str:
+    client = scope.get("client")
+    return client[0] if client else ""
+
+
+async def _asgi_send_script(send: Any) -> None:
+    body, content_type = fingerprint_script()
+    await send({
+        "type": "http.response.start",
+        "status": 200,
+        "headers": [
+            [b"content-type", content_type.encode()],
+            [b"content-length", str(len(body)).encode()],
+            [b"cache-control", b"public, max-age=3600"],
+        ],
+    })
+    await send({"type": "http.response.body", "body": body})
+
+
 # --- WSGI Middleware (Flask) ---
 
 
@@ -169,6 +218,7 @@ class MicroguardWSGI:
         self._trust_xff = trust_forwarded_for
         self._r = redis.Redis.from_url(redis_url, decode_responses=True)
         self._store = RedisSessionStateStore(self._r, default_ttl=session_ttl)
+        _config = RedisRuntimeConfig(self._r)
         self._scorer = LiveScorer(
             self._store,
             block_threshold=block_threshold,
@@ -177,7 +227,10 @@ class MicroguardWSGI:
             # deployment shows up in `microguard dashboard` too — and honors a
             # threshold moved from it without a restart.
             recorder=RedisDecisionRecorder(self._r),
-            threshold_source=RedisRuntimeConfig(self._r).block_threshold,
+            threshold_source=_config.block_threshold,
+            # Without this, decision 10A's observe-only posture is
+            # permanent: every signal is measured and none can decide.
+            promoted_source=_config.promoted_signals,
         )
 
     def __call__(self, environ: dict, start_response: Any) -> Any:
@@ -189,6 +242,19 @@ class MicroguardWSGI:
         ua = environ.get("HTTP_USER_AGENT", "")
         method = environ.get("REQUEST_METHOD", "GET")
         path = environ.get("PATH_INFO", "/")
+
+        # Same reason as the ASGI side: both deployment modes carry the same
+        # capability, or one of them is quietly second-class.
+        if path in SCRIPT_PATHS:
+            body, content_type = fingerprint_script()
+            start_response("200 OK", [
+                ("Content-Type", content_type),
+                ("Content-Length", str(len(body))),
+                ("Cache-Control", "public, max-age=3600"),
+            ])
+            return [body]
+        if path in FP_PATHS:
+            return self._wsgi_fingerprint(environ, start_response)
 
         entry = LogEntry(
             ip=ip,
@@ -206,7 +272,7 @@ class MicroguardWSGI:
         except Exception:
             # Fail open: a Redis outage must not 500 every request.
             logger.exception("scoring failed, allowing request")
-            result = dict(_FAIL_OPEN)
+            result = fail_open_result()
 
         if result["label"] == "bot":
             body = json.dumps(result).encode()
@@ -221,6 +287,29 @@ class MicroguardWSGI:
             for name, value in _score_headers(result):
                 environ["HTTP_" + name.upper().replace("-", "_")] = value
             return self.app(environ, start_response)
+
+    def _wsgi_fingerprint(self, environ: dict, start_response: Any) -> Any:
+        try:
+            length = int(environ.get("CONTENT_LENGTH") or 0)
+        except ValueError:
+            length = 0
+        # Read at most the cap, never the declared length. A client that
+        # announces a large body gets its announcement ignored.
+        body = environ["wsgi.input"].read(min(max(length, 0), MAX_FP_BODY_BYTES + 1))
+
+        headers = {
+            k[5:].replace("_", "-").lower(): v
+            for k, v in environ.items()
+            if k.startswith("HTTP_")
+        }
+        ip = _extract_ip(headers, self._trust_xff, environ.get("REMOTE_ADDR", ""))
+        status, payload = handle_fp_post(self._r, ip, body)
+        start_response(f"{status} OK", [
+            ("Content-Type", "application/json"),
+            ("Content-Length", str(len(payload))),
+        ])
+        return [payload]
+
 
 
 # --- Helpers ---

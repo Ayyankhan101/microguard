@@ -1,8 +1,167 @@
 # Changelog
 
-## [Unreleased]
+## [3.0.0] - 2026-09-12
+
+### Breaking
+
+- **`SessionStateStore.record_request` returns a `SessionSnapshot`**, not a
+  `LiveSession`. The snapshot carries the session plus the signals resolved for
+  that actor, so both arrive in one Redis round trip on the path nginx waits
+  on. Anyone who implemented the Protocol — it is documented as an extension
+  point in `reference-live-api.md` — needs to return the new shape; read
+  `snapshot.session` where you previously had the session.
+- **Actor records moved to `mg:v2:actor:`** and are a Redis HASH rather than a
+  JSON string. v1 keys are never touched and expire on their own. The prefix is
+  versioned because `HINCRBY` against a v1 string is `WRONGTYPE`.
+- `label_session` takes a second `signals` argument. It defaults to
+  `EMPTY_SIGNALS`, so every existing caller is unaffected.
 
 ### Added
+- **Per-deployment adaptation.** An operator corrects a wrong verdict from the
+  dashboard; `microguard retrain --deployment-id <id>` fine-tunes the baseline
+  on that deployment's own confirmed corrections and publishes a model the
+  running check server picks up within about five seconds, with no restart and
+  no dropped sessions.
+  - **The shipped baseline is never written.** One deployment's bad corrections
+    must not corrupt what every other deployment, and every fresh install,
+    starts from. Rolling back is deleting one file.
+  - Decisions now carry an **id** and the **feature vector** they were made
+    from. Neither existed, and without both a correction has nothing to point
+    at and nothing to train on: the live session is a 200-entry sliding window
+    on a 1800s TTL, so by the time anyone reviews a block, the inputs are gone.
+  - Corrections are keyed by decision id, so a double-click or a changed mind
+    is one example with one label. Recording is open by default and retraining
+    is the gated step, because a recorded correction changes nothing until
+    someone deliberately acts on it.
+  - Both safety rails refuse rather than crash, and say what would change the
+    answer: fewer than 50 corrections, or more than 90% one class.
+- **Signal promotion.** `mg:v1:config` now carries the list of sources allowed
+  to decide a verdict, settable from the dashboard and read per request. Every
+  signal built in this release ships observe-only; nothing blocks until you
+  promote it.
+- **A shadow counter** beside the threshold slider: how many of the last N
+  decisions a candidate threshold would block, and how many more or fewer that
+  is than actually happened. Observe-only mode is the documented way to start a
+  deployment, and until now it produced no number at all.
+
+### Fixed
+- A corrupt deployment model degraded the scorer to heuristics-only with **no
+  symptom**: no exception, no warning at request time, `model_score` pinned at
+  0.0 and every blend quietly missing 60% of its signal. The scorer now refuses
+  a model it cannot load, keeps the one that works, and reports the refusal on
+  every decision so the dashboard can show it.
+- A retrained model was published without the `normalization.json` that
+  `load()` reads from the directory beside it, so it would have scored **raw**
+  features while trained on scaled ones — the same mismatch that once left this
+  project with 2.4% held-out bot recall instead of 100%, silently. The
+  baseline's normalization now travels with every deployment model.
+- `/api/live/events` and the SSE stream no longer ship the stored feature
+  vector. The browser has no use for 19 floats per row, and a per-session
+  behavioural vector should not travel further than it needs to.
+
+- **Browser fingerprinting.** `GET /fingerprint.js` and `POST /fp`, served by
+  all three deployment hosts. The script collects canvas, WebGL, font, screen
+  and timezone signals, hashes them with SHA-256 **in the browser**, and sends
+  only the digest — the server never receives a raw component and cannot
+  reconstruct one.
+  - **This raises the bar; it does not win an arms race.** A determined
+    operator running real headless Chrome produces a perfectly good
+    fingerprint. The population this catches is the much larger one that never
+    runs JavaScript at all: plain HTTP clients, simple scripts, naive scrapers.
+  - **A hash is only accepted from an IP that already has session history, and
+    only once per session.** Without that, `/fp` is an amplification vector: an
+    attacker who harvests a hash real browsers produce could replay it from a
+    botnet and get those real users blocked by the cross-IP rule.
+  - Every outcome answers 200 with identical bytes. A 4xx would hand an
+    unauthenticated caller an oracle for which IPs are bindable, and would
+    surface a microguard problem as an error on someone else's page.
+  - Both rules are observe-only until promoted, like every other signal.
+- **Actor identity.** `mg:v2:actor:{hash}` links sessions across IP changes
+  with a 30-day sliding TTL. A returning fingerprint from a new address is the
+  one signal IP reputation structurally cannot provide.
+- **AbuseIPDB**, optional and keyed. With no `ABUSEIPDB_API_KEY` the signal is
+  inert and nothing is broken. Two budgets are respected: a response cache and
+  a daily counter, because exhausting the free tier gets the key rate-limited,
+  which takes the signal down for every address rather than one.
+- **A browser CI job.** Playwright against real Chromium on a single runner,
+  asserting the hash varies with the environment and that the network payload
+  contains the digest and nothing else. The privacy claim is read off the wire
+  rather than asserted in prose.
+
+### Fixed
+- **`/fp`'s first-hash-wins gate was a check-then-set race**, and an attacker
+  could win it on purpose. Two concurrent submissions from one bound IP with
+  different hashes both read "nothing bound", both passed the gate, and both
+  recorded — letting a single IP with a live session credit an unlimited number
+  of harvested hashes and inflate the cross-IP count for each. That is exactly
+  the amplification the binding rule exists to prevent. The binding is now
+  claimed atomically with `SET NX`.
+- Actor records are a Redis HASH (`mg:v2:actor:`) rather than a JSON string, so
+  sightings increment with `HINCRBY` instead of a read-modify-write that lost
+  increments under precisely the traffic the number describes: a farm hitting
+  one fingerprint from many addresses at once. The prefix carries a version
+  because `HINCRBY` against a v1 string is `WRONGTYPE`.
+- `hosting` is no longer offered as a promotable signal. It is resolved and
+  recorded, but no rule reads it, so promoting it produced an "enforced" badge
+  and zero enforcement — permanently and silently. A test now asserts every
+  promotable source has a rule that reads it.
+- The ASGI `/fp` handler no longer blocks the event loop on Redis I/O.
+- The fingerprint script now says why it cannot run on a plain-HTTP origin.
+  SubtleCrypto only exists in a secure context, so on HTTP the script was inert
+  and no fingerprint ever arrived — which, because the absence rule reads a
+  missing fingerprint as evidence, would have made an HTTP site look like it
+  was full of bots. It logs a console warning instead of returning silently,
+  and the deploy guide says so.
+
+- **A signal seam, so external reputation data can reach the rules without
+  reaching the request path.** `label_session` now takes a `signals` argument
+  and stays a pure function of its arguments. It is called inline on every
+  nginx `auth_request` (`live/scorer.py`), so a lookup performed inside a rule
+  would put a network round trip in front of a real visitor, where nginx turns
+  slowness into a 500. Signals are resolved before the call instead.
+  - `microguard/signals.py` is stdlib-only and lives outside `live/` on
+    purpose: `live/__init__.py` raises ImportError without redis-py, and
+    `labeler.py` is on the `microguard scan` path. Two tests spawn a fresh
+    interpreter and assert that importing either module leaves `redis` out of
+    `sys.modules`.
+  - `Signals.resolved` separates "we looked and found nothing" from "we never
+    looked". In a batch scan nothing is ever resolved, so a rule reading
+    absence as evidence would label every session in every log file a bot.
+  - `Signals.promoted` carries the deployment's opt-in list. A resolved but
+    unpromoted signal is recorded on the decision and decides nothing, so an
+    operator can measure what enforcing it would cost before enforcing it.
+- **`microguard signals`** — the slow tier, in its own process. Fetches the Tor
+  exit-node list and AWS prefix ranges from their published keyless endpoints,
+  caches them with a stale-on-failure fallback, and resolves signals only for
+  actors that already have a live session. Writes a heartbeat that never
+  expires, so "never started" stays distinguishable from "died an hour ago".
+- **`microguard explain <ip>`** — the session, the resolved signals, their
+  promotion state, and the rule that decided the verdict. Read-only: it reads
+  the session back rather than recording a request, because diagnosis must not
+  change the thing being diagnosed.
+- **Signal health in the dashboard sidebar.** Every signal here fails silently
+  by design, and a source that has been dead for a week looks identical to a
+  clean actor. The sidebar names the source and the reason.
+
+### Changed
+- `SessionStateStore.record_request` returns a `SessionSnapshot` (session plus
+  signals) rather than a bare session, so the signals read rides along in the
+  existing pipeline. On a remote Redis that is one 15ms wait on the
+  `auth_request` path instead of two. A test asserts exactly one pipeline
+  execution per scored request, and another asserts the in-memory test double
+  and the real store return the same shape — a drifted double would make every
+  live test pass against something Redis never produces.
+- `extract_features` now runs when a model **or** a recorder is present rather
+  than only when a model is loaded. It is roughly 2ms and the dominant
+  per-request cost, so a deployment with neither no longer pays for a vector
+  nothing reads.
+
+### Fixed
+- The fail-open decision payload was duplicated verbatim in `live/server.py`
+  and `live/middleware.py` — twelve identical keys and the same comment. Both
+  now build it from one function. A payload missing a key the dashboard reads
+  fails during an outage, which is the worst possible time to find it.
+
 - **Test coverage raised from 77% to 100%**, 502 tests to 776. The number is
   the side effect; the work was fixing tests that could not fail and covering
   detection logic that had never run.

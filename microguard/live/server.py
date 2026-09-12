@@ -39,48 +39,65 @@ from typing import cast
 import redis
 
 from ..parser import LogEntry
+from .fp_routes import (
+    FP_PATHS,
+    MAX_FP_BODY_BYTES,
+    SCRIPT_PATHS,
+    fingerprint_script,
+    handle_fp_post,
+)
 from .redis_events import RedisDecisionRecorder
 from .redis_store import RedisSessionStateStore
 from .runtime_config import RedisRuntimeConfig
-from .scorer import BLOCK_THRESHOLD_DEFAULT, LiveScorer
+from .scorer import BLOCK_THRESHOLD_DEFAULT, LiveScorer, fail_open_result
 
 logger = logging.getLogger(__name__)
-
-
-def _fail_open_result(ip: str) -> dict:
-    """The decision payload for a request we could not score.
-
-    Same shape as a real decision so downstream consumers never special-case
-    it; model_loaded False and the reason string say what happened.
-    """
-    return {
-        "ip": ip,
-        "label": "human",
-        "score": 0.0,
-        "model_score": 0.0,
-        "heuristic_label": "unknown",
-        "heuristic_confidence": 0.0,
-        "heuristic_reason": "scoring unavailable",
-        "reason": "scoring unavailable",
-        "request_count": 0,
-        "duration": 0.0,
-        "model_loaded": False,
-        # No threshold was consulted, and saying otherwise would let a
-        # dashboard plot a bar this decision never met.
-        "block_threshold": None,
-    }
 
 
 class CheckHandler(BaseHTTPRequestHandler):
     """Handle /check requests from nginx auth_request."""
 
     scorer: LiveScorer
+    # Set alongside the scorer. The fingerprint routes write actor state
+    # directly rather than through the session store, which only records
+    # requests.
+    redis_client: redis.Redis | None = None
     # X-Forwarded-For is client-supplied. Only honor it when the operator
     # confirms a trusted proxy rewrites it (see --trust-forwarded-for).
     trust_forwarded_for: bool = False
 
+    def do_POST(self):
+        """The only writable route, and the only public one that takes a body.
+
+        Answers 200 whatever happens -- see fp_routes for why a public,
+        unauthenticated, non-critical route must not report its own failures.
+        """
+        if self.path.split("?")[0] not in FP_PATHS:
+            self._send_not_here()
+            return
+
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+        except ValueError:
+            length = 0
+        # Read at most the cap, never the declared length. A client that
+        # announces a large body gets its announcement ignored rather than
+        # this process allocating for it.
+        body = self.rfile.read(min(max(length, 0), MAX_FP_BODY_BYTES + 1))
+
+        status, payload = handle_fp_post(self.redis_client, self._get_client_ip(), body)
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
+
     def do_GET(self):
-        if self.path != "/check":
+        path = self.path.split("?")[0]
+        if path in SCRIPT_PATHS:
+            self._send_script()
+            return
+        if path != "/check":
             self._send_not_here()
             return
 
@@ -108,7 +125,7 @@ class CheckHandler(BaseHTTPRequestHandler):
             # 500 for the visitor, so a Redis blip here would take the whole
             # site down. An unscored request beats an outage.
             logger.exception("scoring failed, allowing request")
-            failed = _fail_open_result(ip)
+            failed = fail_open_result(ip)
             self.send_response(200)
             self._send_score_headers(failed)
             self.end_headers()
@@ -119,6 +136,21 @@ class CheckHandler(BaseHTTPRequestHandler):
         self._send_score_headers(result)
         self.end_headers()
         self.wfile.write(json.dumps(result).encode())
+
+    def _send_script(self) -> None:
+        """Serve the client probe.
+
+        Cached rather than no-store: the script changes only on deploy, and a
+        revalidation per page load on every visitor is real traffic through
+        the process nginx is waiting on.
+        """
+        body, content_type = fingerprint_script()
+        self.send_response(200)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "public, max-age=3600")
+        self.end_headers()
+        self.wfile.write(body)
 
     def _send_not_here(self) -> None:
         """Answer any path other than /check with an explanation.
@@ -146,6 +178,10 @@ class CheckHandler(BaseHTTPRequestHandler):
             "This is the nginx auth_request endpoint, not the web UI.\n"
             "The only route here is /check, and it is meant to be called by\n"
             "nginx rather than opened in a browser.\n"
+            "\n"
+            "Public routes, if you have wired the nginx location for them:\n"
+            "    GET  /fingerprint.js\n"
+            "    POST /fp\n"
             "\n"
             "Looking for the dashboard?\n"
             "    microguard dashboard        # http://127.0.0.1:8500\n"
@@ -205,6 +241,7 @@ def run_server(
     block_threshold: float = BLOCK_THRESHOLD_DEFAULT,
     session_ttl: int = 1800,
     trust_forwarded_for: bool = False,
+    deployment_id: str | None = None,
 ):
     """Start the check server."""
     r = redis.Redis.from_url(redis_url, decode_responses=True)
@@ -223,9 +260,16 @@ def run_server(
         block_threshold=block_threshold,
         recorder=recorder,
         threshold_source=config.block_threshold,
+        # Without this, decision 10A's observe-only posture is permanent:
+        # every signal is measured and none can ever decide anything.
+        promoted_source=config.promoted_signals,
+        # None means the shipped baseline, always. A deployment model must
+        # never be picked up by a process that did not ask for one.
+        deployment_id=deployment_id,
     )
 
     CheckHandler.scorer = scorer
+    CheckHandler.redis_client = r
     CheckHandler.trust_forwarded_for = trust_forwarded_for
 
     # Threaded, not the plain HTTPServer. The reason is the Redis round trip,
@@ -257,9 +301,12 @@ def run_server(
     # below is heuristics-only. Say so where an operator will actually see it.
     print(f"  model: {'loaded' if scorer.model_loaded else 'NOT LOADED (heuristics only)'}")
     print(f"  trust X-Forwarded-For: {trust_forwarded_for}")
+    print(f"  model in use: {scorer.active_model_path}")
     # Said up front, because this server looks dead when it is working: it
     # logs nothing per request and serves one machine-facing route.
     print("  web UI: not here - run 'microguard dashboard' (this serves nginx)")
+    print("  public routes: GET /fingerprint.js, POST /fp (needs a non-internal")
+    print("                 nginx location - see docs/howto-deploy-behind-nginx.md)")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
@@ -274,6 +321,7 @@ def main():
     parser.add_argument("--redis-url", default="redis://localhost:6379")
     parser.add_argument("--block-threshold", type=float, default=BLOCK_THRESHOLD_DEFAULT)
     parser.add_argument("--session-ttl", type=int, default=1800)
+    parser.add_argument("--deployment-id", default=None)
     parser.add_argument(
         "--trust-forwarded-for",
         action="store_true",
@@ -287,6 +335,7 @@ def main():
         block_threshold=args.block_threshold,
         session_ttl=args.session_ttl,
         trust_forwarded_for=args.trust_forwarded_for,
+        deployment_id=args.deployment_id,
     )
 
 

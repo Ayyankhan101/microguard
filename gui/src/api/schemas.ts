@@ -10,10 +10,36 @@ import { z } from 'zod';
 export const LabelSchema = z.enum(['bot', 'human', 'automated-integration', 'unknown']);
 export type Label = z.infer<typeof LabelSchema>;
 
+export const SignalSourceSchema = z.object({
+  name: z.string(),
+  ok: z.boolean(),
+  entries: z.number(),
+  fetched_at: z.number().optional(),
+  error: z.string().optional(),
+});
+
+/**
+ * `running: false` carries a reason because the three ways the slow tier can
+ * be absent need different fixes: no redis, redis unreachable, or a refresher
+ * nobody ever started.
+ */
+export const SignalHealthSchema = z.object({
+  running: z.boolean(),
+  reason: z.string().optional(),
+  age_seconds: z.number().optional(),
+  resolved: z.number().optional(),
+  sources: z.array(SignalSourceSchema),
+});
+export type SignalHealth = z.infer<typeof SignalHealthSchema>;
+
 export const HealthSchema = z.object({
   version: z.string(),
   model_loaded: z.boolean(),
   redis_connected: z.boolean(),
+  signals: SignalHealthSchema,
+  /** False when no --deployment-id was set: corrections have nothing to
+   *  attribute to, so the control explains itself instead of failing. */
+  feedback_enabled: z.boolean(),
 });
 export type Health = z.infer<typeof HealthSchema>;
 
@@ -120,7 +146,16 @@ export const DecisionSchema = z.object({
   request_count: z.number(),
   duration: z.number(),
   model_loaded: z.boolean(),
+  /**
+   * Set when a retrained model would not load and the previous one was kept.
+   * It rides the decision because that is the only channel this app reads —
+   * the failure it replaces was completely silent, and a dead model is
+   * indistinguishable from a working one in every score it produces.
+   */
+  model_refused: z.string().nullable().optional(),
   block_threshold: z.number().nullable(),
+  /** What a correction points at. Absent on rows recorded before M3. */
+  id: z.string().optional(),
   ts: z.number(),
 });
 export type Decision = z.infer<typeof DecisionSchema>;
@@ -139,8 +174,16 @@ export const LiveStatsSchema = z.object({
 });
 export type LiveStats = z.infer<typeof LiveStatsSchema>;
 
+/**
+ * `promoted_signals` is the list of sources allowed to decide a verdict. A
+ * signal that is resolved but not promoted is recorded on every decision and
+ * changes none of them — that is how a new signal gets measured against real
+ * traffic before it starts blocking anyone.
+ */
 export const LiveConfigSchema = z.object({
   block_threshold: z.number().nullable(),
+  promoted_signals: z.array(z.string()),
+  known_signals: z.array(z.string()),
   writable: z.boolean(),
 });
 export type LiveConfig = z.infer<typeof LiveConfigSchema>;

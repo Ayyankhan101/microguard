@@ -3,6 +3,43 @@
 ## [Unreleased]
 
 ### Added
+- **Browser fingerprinting.** `GET /fingerprint.js` and `POST /fp`, served by
+  all three deployment hosts. The script collects canvas, WebGL, font, screen
+  and timezone signals, hashes them with SHA-256 **in the browser**, and sends
+  only the digest — the server never receives a raw component and cannot
+  reconstruct one.
+  - **This raises the bar; it does not win an arms race.** A determined
+    operator running real headless Chrome produces a perfectly good
+    fingerprint. The population this catches is the much larger one that never
+    runs JavaScript at all: plain HTTP clients, simple scripts, naive scrapers.
+  - **A hash is only accepted from an IP that already has session history, and
+    only once per session.** Without that, `/fp` is an amplification vector: an
+    attacker who harvests a hash real browsers produce could replay it from a
+    botnet and get those real users blocked by the cross-IP rule.
+  - Every outcome answers 200 with identical bytes. A 4xx would hand an
+    unauthenticated caller an oracle for which IPs are bindable, and would
+    surface a microguard problem as an error on someone else's page.
+  - Both rules are observe-only until promoted, like every other signal.
+- **Actor identity.** `mg:v1:actor:{hash}` links sessions across IP changes
+  with a 30-day sliding TTL. A returning fingerprint from a new address is the
+  one signal IP reputation structurally cannot provide.
+- **AbuseIPDB**, optional and keyed. With no `ABUSEIPDB_API_KEY` the signal is
+  inert and nothing is broken. Two budgets are respected: a response cache and
+  a daily counter, because exhausting the free tier gets the key rate-limited,
+  which takes the signal down for every address rather than one.
+- **A browser CI job.** Playwright against real Chromium on a single runner,
+  asserting the hash varies with the environment and that the network payload
+  contains the digest and nothing else. The privacy claim is read off the wire
+  rather than asserted in prose.
+
+### Fixed
+- The fingerprint script now says why it cannot run on a plain-HTTP origin.
+  SubtleCrypto only exists in a secure context, so on HTTP the script was inert
+  and no fingerprint ever arrived — which, because the absence rule reads a
+  missing fingerprint as evidence, would have made an HTTP site look like it
+  was full of bots. It logs a console warning instead of returning silently,
+  and the deploy guide says so.
+
 - **A signal seam, so external reputation data can reach the rules without
   reaching the request path.** `label_session` now takes a `signals` argument
   and stays a pure function of its arguments. It is called inline on every

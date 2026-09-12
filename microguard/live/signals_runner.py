@@ -16,6 +16,7 @@ from typing import cast
 
 import redis
 
+from .abuseipdb import AbuseIPDBClient
 from .signals_refresher import (
     DEFAULT_INTERVAL_S,
     SignalRefresher,
@@ -32,7 +33,7 @@ def build_sources(
     cache: Path | None = None,
     tor_fetch: Callable[[], str] | None = None,
     cidr_fetch: Callable[[], str] | None = None,
-) -> tuple[set[str], list, list[SourceHealth]]:
+) -> tuple[set[str], list, list[SourceHealth], AbuseIPDBClient]:
     """Load every feed, reporting what each one did.
 
     A feed that fails degrades to empty or to its stale cache and is recorded
@@ -51,12 +52,27 @@ def build_sources(
         root / "hosting_ranges.json", fetch=cidr_fetch,
         on_error=lambda e: errors.__setitem__("hosting", e),
     )
+    abuse = AbuseIPDBClient(cache_path=root / "abuseipdb_cache.json")
+
     now = time.time()
     health.append(SourceHealth("tor", "tor" not in errors, len(tor), now, errors.get("tor", "")))
     health.append(
         SourceHealth("hosting", "hosting" not in errors, len(ranges), now, errors.get("hosting", ""))
     )
-    return tor, ranges, health
+    # An unconfigured key is reported as ok with zero budget rather than as a
+    # failure: not setting it is the normal state, not a broken one. `entries`
+    # carries the remaining daily budget, which is the number an operator
+    # actually needs when the signal goes quiet.
+    health.append(
+        SourceHealth(
+            "abuseipdb",
+            ok=not abuse.last_error,
+            entries=abuse.quota_remaining if abuse.is_configured() else 0,
+            fetched_at=now,
+            error=abuse.last_error or ("" if abuse.is_configured() else "no API key set"),
+        )
+    )
+    return tor, ranges, health, abuse
 
 
 def run_refresher(
@@ -73,10 +89,11 @@ def run_refresher(
     while _max_iterations is None or iterations < _max_iterations:
         iterations += 1
         try:
-            tor, ranges, health = build_sources(cache, tor_fetch, cidr_fetch)
+            tor, ranges, health, abuse = build_sources(cache, tor_fetch, cidr_fetch)
             resolved = SignalRefresher(
                 client, tor_nodes=tor, hosting_ranges=ranges,
                 ttl=session_ttl, health=health,
+                abuse_client=abuse if abuse.is_configured() else None,
             ).run_once()
             logger.info("resolved signals for %d actor(s)", resolved)
         except Exception:
@@ -100,7 +117,7 @@ def main(
     print(f"  redis: {redis_url}")
     print(f"  cache: {cache_dir()}")
     print("  resolves signals for actors with a live session only")
-    tor, ranges, health = build_sources()
+    tor, ranges, health, _abuse = build_sources()
     for source in health:
         state = f"{source.entries} entries" if source.ok else f"FAILED ({source.error})"
         print(f"  {source.name}: {state}")

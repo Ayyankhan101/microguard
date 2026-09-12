@@ -263,3 +263,39 @@ class TestStaleCacheFallback:
 
         assert load_tor_exit_nodes(cache, max_age_hours=24, fetch=boom) == {"9.9.9.9"}
         assert "using stale cache" in caplog.text
+
+
+class TestAbuseScoreResolution:
+    def test_a_configured_client_contributes_its_score(self, clean_redis):
+        from microguard.live.redis_store import RedisSessionStateStore
+
+        RedisSessionStateStore(clean_redis, default_ttl=60).record_request(
+            "1.1.1.1", "ua", _entry("1.1.1.1")
+        )
+
+        class Lookup:
+            def check_ip(self, ip):
+                return 91.0
+
+        SignalRefresher(clean_redis, tor_nodes=set(), hosting_ranges=[],
+                        abuse_client=Lookup()).run_once()
+
+        assert json.loads(clean_redis.get("mg:v1:signals:1.1.1.1"))["abuse_score"] == 91.0
+
+    def test_a_none_score_leaves_the_field_absent(self, clean_redis):
+        """None means 'no opinion' -- unconfigured, out of budget, or a failed
+        lookup. Writing it as a number would let a failure read as a verdict."""
+        from microguard.live.redis_store import RedisSessionStateStore
+
+        RedisSessionStateStore(clean_redis, default_ttl=60).record_request(
+            "1.1.1.1", "ua", _entry("1.1.1.1")
+        )
+
+        class Silent:
+            def check_ip(self, ip):
+                return None
+
+        SignalRefresher(clean_redis, tor_nodes=set(), hosting_ranges=[],
+                        abuse_client=Silent()).run_once()
+
+        assert "abuse_score" not in json.loads(clean_redis.get("mg:v1:signals:1.1.1.1"))

@@ -25,6 +25,13 @@ from typing import Any
 import redis
 
 from ..parser import LogEntry
+from .fp_routes import (
+    FP_PATHS,
+    MAX_FP_BODY_BYTES,
+    SCRIPT_PATHS,
+    fingerprint_script,
+    handle_fp_post,
+)
 from .redis_events import RedisDecisionRecorder
 from .redis_store import RedisSessionStateStore
 from .runtime_config import RedisRuntimeConfig
@@ -81,6 +88,17 @@ class MicroguardASGI:
         method = scope.get("method", "GET")
         path = scope.get("path", "/")
 
+        # The two public fingerprint routes are answered here rather than
+        # passed through. Without this, fingerprinting would exist only in the
+        # `microguard serve` deployment mode, and the epic requires both modes
+        # to carry the same capability.
+        if path in SCRIPT_PATHS:
+            await _asgi_send_script(send)
+            return
+        if path in FP_PATHS:
+            await self._asgi_fingerprint(scope, receive, send)
+            return
+
         entry = LogEntry(
             ip=ip,
             timestamp=datetime.now(timezone.utc),
@@ -124,6 +142,47 @@ class MicroguardASGI:
                 (k, v) for k, v in _score_headers_asgi(result)
             )
             await self.app(scope, receive, send)
+
+
+    async def _asgi_fingerprint(self, scope: dict, receive: Any, send: Any) -> None:
+        body = b""
+        while len(body) <= MAX_FP_BODY_BYTES:
+            message = await receive()
+            body += message.get("body", b"")
+            if not message.get("more_body"):
+                break
+
+        headers = {k.decode().lower(): v.decode() for k, v in scope.get("headers", [])}
+        ip = _extract_ip(headers, self._trust_xff, _asgi_client(scope))
+        status, payload = handle_fp_post(self._r, ip, body)
+        await send({
+            "type": "http.response.start",
+            "status": status,
+            "headers": [
+                [b"content-type", b"application/json"],
+                [b"content-length", str(len(payload)).encode()],
+            ],
+        })
+        await send({"type": "http.response.body", "body": payload})
+
+
+def _asgi_client(scope: dict) -> str:
+    client = scope.get("client")
+    return client[0] if client else ""
+
+
+async def _asgi_send_script(send: Any) -> None:
+    body, content_type = fingerprint_script()
+    await send({
+        "type": "http.response.start",
+        "status": 200,
+        "headers": [
+            [b"content-type", content_type.encode()],
+            [b"content-length", str(len(body)).encode()],
+            [b"cache-control", b"public, max-age=3600"],
+        ],
+    })
+    await send({"type": "http.response.body", "body": body})
 
 
 # --- WSGI Middleware (Flask) ---
@@ -172,6 +231,19 @@ class MicroguardWSGI:
         method = environ.get("REQUEST_METHOD", "GET")
         path = environ.get("PATH_INFO", "/")
 
+        # Same reason as the ASGI side: both deployment modes carry the same
+        # capability, or one of them is quietly second-class.
+        if path in SCRIPT_PATHS:
+            body, content_type = fingerprint_script()
+            start_response("200 OK", [
+                ("Content-Type", content_type),
+                ("Content-Length", str(len(body))),
+                ("Cache-Control", "public, max-age=3600"),
+            ])
+            return [body]
+        if path in FP_PATHS:
+            return self._wsgi_fingerprint(environ, start_response)
+
         entry = LogEntry(
             ip=ip,
             timestamp=datetime.now(timezone.utc),
@@ -203,6 +275,29 @@ class MicroguardWSGI:
             for name, value in _score_headers(result):
                 environ["HTTP_" + name.upper().replace("-", "_")] = value
             return self.app(environ, start_response)
+
+    def _wsgi_fingerprint(self, environ: dict, start_response: Any) -> Any:
+        try:
+            length = int(environ.get("CONTENT_LENGTH") or 0)
+        except ValueError:
+            length = 0
+        # Read at most the cap, never the declared length. A client that
+        # announces a large body gets its announcement ignored.
+        body = environ["wsgi.input"].read(min(max(length, 0), MAX_FP_BODY_BYTES + 1))
+
+        headers = {
+            k[5:].replace("_", "-").lower(): v
+            for k, v in environ.items()
+            if k.startswith("HTTP_")
+        }
+        ip = _extract_ip(headers, self._trust_xff, environ.get("REMOTE_ADDR", ""))
+        status, payload = handle_fp_post(self._r, ip, body)
+        start_response(f"{status} OK", [
+            ("Content-Type", "application/json"),
+            ("Content-Length", str(len(payload))),
+        ])
+        return [payload]
+
 
 
 # --- Helpers ---

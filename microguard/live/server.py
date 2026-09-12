@@ -39,6 +39,13 @@ from typing import cast
 import redis
 
 from ..parser import LogEntry
+from .fp_routes import (
+    FP_PATHS,
+    MAX_FP_BODY_BYTES,
+    SCRIPT_PATHS,
+    fingerprint_script,
+    handle_fp_post,
+)
 from .redis_events import RedisDecisionRecorder
 from .redis_store import RedisSessionStateStore
 from .runtime_config import RedisRuntimeConfig
@@ -51,12 +58,46 @@ class CheckHandler(BaseHTTPRequestHandler):
     """Handle /check requests from nginx auth_request."""
 
     scorer: LiveScorer
+    # Set alongside the scorer. The fingerprint routes write actor state
+    # directly rather than through the session store, which only records
+    # requests.
+    redis_client: redis.Redis | None = None
     # X-Forwarded-For is client-supplied. Only honor it when the operator
     # confirms a trusted proxy rewrites it (see --trust-forwarded-for).
     trust_forwarded_for: bool = False
 
+    def do_POST(self):
+        """The only writable route, and the only public one that takes a body.
+
+        Answers 200 whatever happens -- see fp_routes for why a public,
+        unauthenticated, non-critical route must not report its own failures.
+        """
+        if self.path.split("?")[0] not in FP_PATHS:
+            self._send_not_here()
+            return
+
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+        except ValueError:
+            length = 0
+        # Read at most the cap, never the declared length. A client that
+        # announces a large body gets its announcement ignored rather than
+        # this process allocating for it.
+        body = self.rfile.read(min(max(length, 0), MAX_FP_BODY_BYTES + 1))
+
+        status, payload = handle_fp_post(self.redis_client, self._get_client_ip(), body)
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
+
     def do_GET(self):
-        if self.path != "/check":
+        path = self.path.split("?")[0]
+        if path in SCRIPT_PATHS:
+            self._send_script()
+            return
+        if path != "/check":
             self._send_not_here()
             return
 
@@ -96,6 +137,21 @@ class CheckHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(json.dumps(result).encode())
 
+    def _send_script(self) -> None:
+        """Serve the client probe.
+
+        Cached rather than no-store: the script changes only on deploy, and a
+        revalidation per page load on every visitor is real traffic through
+        the process nginx is waiting on.
+        """
+        body, content_type = fingerprint_script()
+        self.send_response(200)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "public, max-age=3600")
+        self.end_headers()
+        self.wfile.write(body)
+
     def _send_not_here(self) -> None:
         """Answer any path other than /check with an explanation.
 
@@ -122,6 +178,10 @@ class CheckHandler(BaseHTTPRequestHandler):
             "This is the nginx auth_request endpoint, not the web UI.\n"
             "The only route here is /check, and it is meant to be called by\n"
             "nginx rather than opened in a browser.\n"
+            "\n"
+            "Public routes, if you have wired the nginx location for them:\n"
+            "    GET  /fingerprint.js\n"
+            "    POST /fp\n"
             "\n"
             "Looking for the dashboard?\n"
             "    microguard dashboard        # http://127.0.0.1:8500\n"
@@ -202,6 +262,7 @@ def run_server(
     )
 
     CheckHandler.scorer = scorer
+    CheckHandler.redis_client = r
     CheckHandler.trust_forwarded_for = trust_forwarded_for
 
     # Threaded, not the plain HTTPServer. The reason is the Redis round trip,
@@ -236,6 +297,8 @@ def run_server(
     # Said up front, because this server looks dead when it is working: it
     # logs nothing per request and serves one machine-facing route.
     print("  web UI: not here - run 'microguard dashboard' (this serves nginx)")
+    print("  public routes: GET /fingerprint.js, POST /fp (needs a non-internal")
+    print("                 nginx location - see docs/howto-deploy-behind-nginx.md)")
     try:
         server.serve_forever()
     except KeyboardInterrupt:

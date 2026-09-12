@@ -19,6 +19,18 @@ from microguard.parser import LogEntry
 BASE = datetime(2023, 3, 24, 17, 0, 0, tzinfo=timezone.utc)
 
 
+class _NullAbuse:
+    """Stands in for an install with no ABUSEIPDB_API_KEY, which is the norm."""
+
+    last_error = ""
+
+    def is_configured(self) -> bool:
+        return False
+
+    def quota_remaining(self) -> int:
+        return 0
+
+
 @pytest.fixture(scope="module")
 def redis_client():
     try:
@@ -47,7 +59,7 @@ class TestBuildSources:
         def boom():
             raise OSError("network down")
 
-        tor, ranges, health = build_sources(cache=tmp_path, tor_fetch=boom, cidr_fetch=boom)
+        tor, ranges, health, _abuse = build_sources(cache=tmp_path, tor_fetch=boom, cidr_fetch=boom)
 
         assert tor == set()
         assert ranges == []
@@ -56,7 +68,7 @@ class TestBuildSources:
         assert "network down" in by_name["tor"].error
 
     def test_a_working_feed_reports_its_entry_count(self, tmp_path):
-        tor, _ranges, health = build_sources(
+        tor, _ranges, health, _abuse = build_sources(
             cache=tmp_path, tor_fetch=lambda: "1.1.1.1\n2.2.2.2\n",
             cidr_fetch=lambda: json.dumps({"prefixes": []}),
         )
@@ -197,6 +209,7 @@ class TestRunnerEntryPoint:
                 {"1.1.1.1"}, [],
                 [runner.SourceHealth("tor", True, 1, 0.0),
                  runner.SourceHealth("hosting", False, 0, 0.0, "network down")],
+                _NullAbuse(),
             ),
         )
         monkeypatch.setattr(runner, "run_refresher", lambda *a, **k: None)
@@ -215,7 +228,7 @@ class TestRunnerEntryPoint:
             runner.redis.Redis, "from_url",
             lambda *a, **k: type("C", (), {"ping": lambda s: True})(),
         )
-        monkeypatch.setattr(runner, "build_sources", lambda *a, **k: (set(), [], []))
+        monkeypatch.setattr(runner, "build_sources", lambda *a, **k: (set(), [], [], _NullAbuse()))
 
         def interrupt(*a, **k):
             raise KeyboardInterrupt

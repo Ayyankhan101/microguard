@@ -13,9 +13,16 @@ payloads. Requires `pip install microguard[live]`.
         EXPIRE live:v2:{ip}      <ttl>          slide the expiry window
         LRANGE live:v2:{ip}      0 -1           read back for scoring
         GET    mg:v1:signals:{ip}               resolved signals, same trip
+        GET    mg:v1:fp:{ip}                    bound fingerprint, same trip
 
-    The signals GET rides along in the same pipeline rather than being its own
-    call. Scoring needs both, and this runs for every request behind nginx
+    Fingerprint state is a separate key rather than a field on the signals
+    record because the two have different writers: the refresher SETs the
+    signals key wholesale on every pass, so a fingerprint stored inside it
+    would be clobbered. Both reads ride the same pipeline, so the split costs
+    nothing here.
+
+    The signal reads ride along in the same pipeline rather than being their
+    own calls. Scoring needs both, and this runs for every request behind nginx
     `auth_request`, so a second round trip would double the dominant cost of
     the whole path on any Redis that is not on localhost.
 
@@ -107,6 +114,33 @@ def _signals_from(raw: str | None):
         return EMPTY_SIGNALS
 
 
+def _with_fingerprint(signals, raw: str | None):
+    """Attach this actor's bound fingerprint, if the pipeline read one.
+
+    `fp_resolved` is set unconditionally: the read happened. That is the whole
+    point of the flag -- rule 1 infers automation from an absent fingerprint,
+    and it must be able to tell "read, and there was none" from "never read",
+    which is what a batch scan looks like.
+    """
+    from dataclasses import replace
+
+    fingerprint_hash = None
+    shared = 0
+    if raw:
+        try:
+            payload = json.loads(raw)
+            fingerprint_hash = payload.get("hash")
+            shared = int(payload.get("shared_ips", 0))
+        except (json.JSONDecodeError, AttributeError, TypeError, ValueError):
+            fingerprint_hash, shared = None, 0
+    return replace(
+        signals,
+        fp_resolved=True,
+        fingerprint_hash=fingerprint_hash,
+        shared_hash_ips=shared,
+    )
+
+
 class RedisSessionStateStore:
     """Redis-backed implementation of SessionStateStore."""
 
@@ -116,17 +150,22 @@ class RedisSessionStateStore:
         prefix: str = SESSION_PREFIX_DEFAULT,
         default_ttl: int = 1800,
         signals_prefix: str = "mg:v1:signals:",
+        fp_prefix: str = "mg:v1:fp:",
     ):
         self._r = redis_client
         self._prefix = prefix
         self._default_ttl = default_ttl
         self._signals_prefix = signals_prefix
+        self._fp_prefix = fp_prefix
 
     def _session_key(self, ip: str) -> str:
         return f"{self._prefix}{ip}"
 
     def _signals_key(self, ip: str) -> str:
         return f"{self._signals_prefix}{ip}"
+
+    def _fp_key(self, ip: str) -> str:
+        return f"{self._fp_prefix}{ip}"
 
     def record_request(
         self,
@@ -145,11 +184,12 @@ class RedisSessionStateStore:
         pipe.expire(key, ttl)
         pipe.lrange(key, 0, -1)
         pipe.get(self._signals_key(ip))
-        *_, raw_entries, raw_signals = pipe.execute()
+        pipe.get(self._fp_key(ip))
+        *_, raw_entries, raw_signals, raw_fp = pipe.execute()
 
         return SessionSnapshot(
             session=_session_from(ip, user_agent, raw_entries),
-            signals=_signals_from(raw_signals),
+            signals=_with_fingerprint(_signals_from(raw_signals), raw_fp),
         )
 
     def delete(self, ip: str) -> None:

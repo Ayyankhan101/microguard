@@ -20,7 +20,6 @@ import redis
 from microguard.live.redis_store import RedisSessionStateStore
 from microguard.live.state import SessionSnapshot, SessionStateStore
 from microguard.parser import LogEntry
-from microguard.signals import EMPTY_SIGNALS
 
 BASE = datetime(2023, 3, 24, 17, 0, 0, tzinfo=timezone.utc)
 
@@ -69,10 +68,18 @@ class TestSnapshotShape:
 
     def test_no_signal_data_means_unresolved_not_empty(self, store):
         """The batch trap again, at the storage layer. An actor with nothing
-        recorded must read as 'not looked up', never as 'looked up, clean'."""
+        recorded must read as 'not looked up', never as 'looked up, clean'.
+
+        `fp_resolved` is the exception and is True here: the pipeline read the
+        fingerprint key, it just found nothing bound. That distinction is the
+        whole reason the two flags are separate -- rule 1 infers automation
+        from an absent fingerprint and needs to know the read happened.
+        """
         snapshot = store.record_request("203.0.113.5", "Mozilla/5.0", _entry())
-        assert snapshot.signals == EMPTY_SIGNALS
         assert snapshot.signals.resolved is False
+        assert snapshot.signals.fp_resolved is True
+        assert snapshot.signals.fingerprint_hash is None
+        assert snapshot.signals.shared_hash_ips == 0
 
 
 class TestStoreShapeParity:
@@ -149,3 +156,35 @@ class TestSignalsComeFromRedis:
             redis_client.pipeline = real_pipeline
 
         assert executions == [1], f"expected one pipeline execution, got {len(executions)}"
+
+
+class TestFingerprintReachesTheSnapshot:
+    def test_a_bound_hash_and_its_count_are_carried(self, redis_client, redis_store):
+        redis_client.set(
+            "mg:v1:fp:203.0.113.5",
+            json.dumps({"hash": "a" * 64, "shared_ips": 7}),
+        )
+        snapshot = redis_store.record_request("203.0.113.5", "Mozilla/5.0", _entry())
+
+        assert snapshot.signals.fp_resolved is True
+        assert snapshot.signals.fingerprint_hash == "a" * 64
+        assert snapshot.signals.shared_hash_ips == 7
+
+    def test_a_corrupt_fingerprint_record_reads_as_unbound(self, redis_client, redis_store):
+        """Not as an error, and not as a bound hash. Rule 1 infers automation
+        from an absent fingerprint, so a garbled record must land on the side
+        that says 'nothing bound' rather than inventing one."""
+        redis_client.set("mg:v1:fp:203.0.113.5", "{not json")
+        snapshot = redis_store.record_request("203.0.113.5", "Mozilla/5.0", _entry())
+
+        assert snapshot.signals.fp_resolved is True
+        assert snapshot.signals.fingerprint_hash is None
+        assert snapshot.signals.shared_hash_ips == 0
+
+    def test_a_record_holding_the_wrong_json_type_reads_as_unbound(
+        self, redis_client, redis_store
+    ):
+        redis_client.set("mg:v1:fp:203.0.113.5", json.dumps(["a" * 64]))
+        snapshot = redis_store.record_request("203.0.113.5", "Mozilla/5.0", _entry())
+
+        assert snapshot.signals.fingerprint_hash is None

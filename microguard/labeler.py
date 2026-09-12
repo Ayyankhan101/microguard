@@ -114,6 +114,32 @@ MIN_RATE_REQUESTS = 5
 # that a shared NAT address can accumulate one.
 THREAT_INTEL_ABUSE_THRESHOLD = 75.0
 
+# How long a session may run before a missing fingerprint means anything. A
+# real browser POSTs within milliseconds of parsing the tag; this is room for a
+# slow connection and a deferred script, not for the script itself.
+FINGERPRINT_GRACE_SECONDS = 5.0
+# And how many requests it must have made. One page view that never finished
+# loading is not evidence of anything.
+FINGERPRINT_MIN_REQUESTS = 3
+# Distinct IPs sharing one fingerprint inside the submission window before it
+# reads as a farm rather than a household behind one NAT.
+SHARED_FINGERPRINT_IPS = 5
+
+# Routes that would have served the script tag. A session that never touches
+# one never had the chance to run the script, so its missing fingerprint says
+# nothing -- a REST or GraphQL client is the obvious case, and flagging it
+# would reintroduce the single-endpoint-API false positive this project has
+# already fixed once.
+API_ROUTE_RE = re.compile(
+    r"^/(?:api|graphql|gql|rpc|v\d+|rest|oauth|auth|token|webhook)\b|"
+    r"^/[A-Za-z0-9_.]+\.[A-Za-z0-9_]+/[A-Za-z0-9_]+$",
+    re.IGNORECASE,
+)
+STATIC_ASSET_RE = re.compile(
+    r"\.(?:js|css|png|jpe?g|gif|svg|ico|woff2?|ttf|map|webp|avif|mp4|json|xml|txt)$",
+    re.IGNORECASE,
+)
+
 # gRPC calls are routed as POST /package.Service/Method — two path segments,
 # method name capitalized by convention, no file extension.
 GRPC_PATH_RE = re.compile(r'^/[\w.]+/[A-Z]\w*$')
@@ -229,6 +255,56 @@ def _check_botnet_signatures(session: Session) -> tuple[bool, str]:
         return True, f'UA rotation ({len(ua_variants)} variants in {session.request_count} requests)'
     
     return False, ''
+
+
+def _looks_like_page_traffic(urls: list[str]) -> bool:
+    """Whether this actor ever requested something that serves HTML.
+
+    Any single page request is enough: that is where the script tag lives, so
+    one is all it takes for a real browser to have had the chance to run it.
+    Requiring more would exempt a bot that loads exactly one page.
+    """
+    return any(
+        not API_ROUTE_RE.search(url) and not STATIC_ASSET_RE.search(url)
+        for url in urls
+    )
+
+
+def _check_fingerprint_signals(
+    session: Session, signals: Signals, urls: list[str]
+) -> tuple[bool, float, str]:
+    """Verdict from client-side fingerprint evidence.
+
+    Two rules of opposite kinds. Rule 2 is positive evidence -- one browser
+    profile arriving from many addresses -- and applies to any session. Rule 1
+    is an inference from ABSENCE, which is far weaker and far easier to get
+    wrong, so it is gated three ways: the pipeline must actually have been
+    consulted, the session must have had a real chance to run the script, and
+    it must have had time to.
+    """
+    if not signals.is_promoted("fingerprint"):
+        return False, 0.0, ""
+
+    if signals.shared_hash_ips >= SHARED_FINGERPRINT_IPS:
+        return (
+            True,
+            0.90,
+            f"one browser fingerprint across {signals.shared_hash_ips} distinct IPs",
+        )
+
+    if (
+        signals.fingerprint_hash is None
+        and session.request_count >= FINGERPRINT_MIN_REQUESTS
+        and session.duration >= FINGERPRINT_GRACE_SECONDS
+        and _looks_like_page_traffic(urls)
+    ):
+        return (
+            True,
+            0.80,
+            f"no fingerprint after {session.duration:.0f}s of page traffic",
+        )
+
+    return False, 0.0, ""
 
 
 def _check_threat_intel_signals(signals: Signals) -> tuple[bool, float, str]:
@@ -348,6 +424,13 @@ def label_session(
     ti_bot, ti_conf, ti_reason = _check_threat_intel_signals(signals)
     if ti_bot:
         return 'bot', ti_conf, f'threat intel: {ti_reason}'
+
+    # 9. Client-side fingerprint evidence, checked alongside threat intel for
+    # the same reason: a direct observation of this actor's own traffic should
+    # not be relabelled by a signal resolved somewhere else.
+    fp_bot, fp_conf, fp_reason = _check_fingerprint_signals(session, signals, urls)
+    if fp_bot:
+        return 'bot', fp_conf, f'fingerprint: {fp_reason}'
 
     # === MEDIUM CONFIDENCE BOT SIGNALS (0.70-0.89) ===
     

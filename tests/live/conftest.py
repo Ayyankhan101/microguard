@@ -10,6 +10,8 @@ CI installs the extra (see .github/workflows/test.yml) so these tests really
 run there; the guard only covers a bare local checkout.
 """
 
+from dataclasses import replace
+
 import pytest
 
 pytest.importorskip(
@@ -56,9 +58,13 @@ class InMemoryStore:
         del session.requests[:-MAX_SESSION_ENTRIES]
         session.start_time = session.requests[0].timestamp.timestamp()
         session.end_time = session.requests[-1].timestamp.timestamp()
+        # fp_resolved mirrors the real store: the pipeline always reads the
+        # fingerprint key, so the read happened whether or not it found one.
+        # A double that reported False here would let rule 1's batch guard
+        # pass in tests while failing in production.
         return SessionSnapshot(
             session=session,
-            signals=self._signals.get(ip, EMPTY_SIGNALS),
+            signals=replace(self._signals.get(ip, EMPTY_SIGNALS), fp_resolved=True),
         )
 
     def delete(self, ip: str) -> None:

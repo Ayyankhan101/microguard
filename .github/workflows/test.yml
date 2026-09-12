@@ -109,6 +109,45 @@ jobs:
             exit 1
           fi
 
+  browser:
+    # The fingerprint script makes two claims no other test can check: that the
+    # hash actually varies with the environment, and that only the hash leaves
+    # the page. Canvas and WebGL do not exist under Node, so a unit test would
+    # pass with every probe returning a constant.
+    #
+    # One runner, not the matrix: downloading a browser twelve times to assert
+    # the same JavaScript behavior buys nothing.
+    name: browser (fingerprint)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[live]"
+          pip install pytest playwright
+          python -m playwright install --with-deps chromium
+
+      - name: Run the browser suite
+        run: python -m pytest tests/browser/ -v --tb=short
+
+      - name: Fail if the browser suite silently skipped
+        run: |
+          # A skipped browser suite looks identical to a passing one. This job
+          # exists to run it, so a skip is a failure here.
+          python -m pytest tests/browser/ -q -rs 2>&1 | tee /tmp/browser.txt
+          if grep -qE "need playwright|chromium not installed" /tmp/browser.txt; then
+            echo "::error::browser suite skipped - playwright or chromium is missing"
+            exit 1
+          fi
+
   gui:
     # The TypeScript dashboard. Node is needed to build and test it; running
     # `microguard dashboard` never is, because the build ships in the wheel.

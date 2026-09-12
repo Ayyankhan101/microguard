@@ -32,6 +32,7 @@ import urllib.request
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Protocol
 
 import redis
 
@@ -51,6 +52,12 @@ SESSION_PREFIX = "live:v2:"
 DEFAULT_MAX_AGE_HOURS = 24
 DEFAULT_INTERVAL_S = 300
 FETCH_TIMEOUT_S = 30
+
+
+class AbuseLookup(Protocol):
+    """The slice of AbuseIPDBClient the refresher actually uses."""
+
+    def check_ip(self, ip: str) -> float | None: ...
 
 
 @dataclass(frozen=True)
@@ -224,6 +231,9 @@ class SignalRefresher:
     hosting_ranges: Sequence
     ttl: int = 1800
     health: Iterable[SourceHealth] = field(default_factory=tuple)
+    # Optional and keyed. None means the signal is simply absent, which is the
+    # default state for an install that never set ABUSEIPDB_API_KEY.
+    abuse_client: AbuseLookup | None = None
 
     def run_once(self) -> int:
         """Resolve and write signals for every live actor. Returns the count."""
@@ -254,10 +264,17 @@ class SignalRefresher:
             # must not stop the pass for every other actor.
             logger.debug("skipping unparseable actor key: %r", ip)
             return None
-        return {
+        payload: dict[str, object] = {
             "tor_exit": ip in self.tor_nodes,
             "hosting_range": any(address in net for net in self.hosting_ranges),
         }
+        if self.abuse_client is not None:
+            # Only for addresses this deployment has actually seen, which is
+            # what keeps a 1000-a-day budget viable at all.
+            score = self.abuse_client.check_ip(ip)
+            if score is not None:
+                payload["abuse_score"] = score
+        return payload
 
     def _beat(self, resolved: int) -> None:
         """Stamp liveness, with no expiry.

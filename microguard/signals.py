@@ -41,15 +41,31 @@ class Signals:
     tor_exit: bool = False
     hosting_range: bool = False
     abuse_score: float | None = None
+    # Whether the fingerprint pipeline was consulted at all. Tracked separately
+    # from `resolved` because the two are produced by different writers: the
+    # refresher writes reputation data on its own schedule, while the
+    # fingerprint record is read on every scored request. A rule that infers
+    # automation from an ABSENT fingerprint needs to know the difference
+    # between "read, and there was none" and "never read".
+    fp_resolved: bool = False
+    fingerprint_hash: str | None = None
+    # Distinct IPs seen sharing this hash inside the window. Denormalized at
+    # submission time: the count lives under the hash, and the hash is only
+    # known after reading the actor's own record, so resolving it at scoring
+    # time would be a dependent second round trip that cannot be pipelined.
+    shared_hash_ips: int = 0
     promoted: frozenset[str] = field(default_factory=frozenset)
 
     def is_promoted(self, source: str) -> bool:
         """Whether `source` may decide a verdict on its own.
 
         False for anything unresolved, regardless of the promotion list: a
-        source cannot act on data that was never looked up.
+        source cannot act on data that was never looked up. Which flag counts
+        as "resolved" depends on the source, since reputation data and
+        fingerprints arrive from different writers on different schedules.
         """
-        return self.resolved and source in self.promoted
+        resolved = self.fp_resolved if source == "fingerprint" else self.resolved
+        return resolved and source in self.promoted
 
 
 # The default every batch caller gets. Shared and immutable, so passing it
